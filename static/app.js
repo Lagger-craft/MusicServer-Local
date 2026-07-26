@@ -202,22 +202,7 @@ function renderImmichAlbumsView() {
   const addBtn = document.getElementById('addToPlaylistBtn');
   addBtn.style.display = 'none';
 
-  const contentActions = document.querySelector('.content-actions');
-  if (immichView !== 'albums') {
-    if (!document.getElementById('immichBackBtn')) {
-      const backBtn = document.createElement('button');
-      backBtn.className = 'play-all-btn';
-      backBtn.id = 'immichBackBtn';
-      backBtn.textContent = '← Álbumes';
-      backBtn.onclick = loadImmichAlbums;
-      backBtn.style.background = 'var(--bg-tertiary)';
-      backBtn.style.color = 'var(--text-secondary)';
-      contentActions.prepend(backBtn);
-    }
-  } else {
-    const existing = document.getElementById('immichBackBtn');
-    if (existing) existing.remove();
-  }
+  renderBackButton(immichView !== 'albums' ? loadImmichAlbums : null);
 
   if (immichView === 'albums') {
     document.getElementById('contentTitle').textContent = '📷 Immich — Álbumes';
@@ -972,6 +957,23 @@ function renderContent() {
   const visible = getVisibleTracks();
   const addBtn = document.getElementById('addToPlaylistBtn');
   addBtn.style.display = visible.length > 0 ? '' : 'none';
+
+  // Back button for folder view
+  renderBackButton(currentFolder ? () => goHome() : null);
+}
+
+function renderBackButton(onclick) {
+  const existing = document.getElementById('backBtn');
+  if (existing) existing.remove();
+  if (!onclick) return;
+  const contentTitle = document.getElementById('contentTitle');
+  const backBtn = document.createElement('button');
+  backBtn.id = 'backBtn';
+  backBtn.className = 'back-btn';
+  backBtn.textContent = '←';
+  backBtn.title = 'Volver';
+  backBtn.onclick = onclick;
+  contentTitle.parentElement.prepend(backBtn);
 }
 
 function renderTrackList() {
