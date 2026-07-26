@@ -654,6 +654,25 @@ async function loadYouTubeChannels() {
   } catch (e) { container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error de conexión</div></div>'; }
 }
 
+let _channelViewUcid = null;
+
+async function loadChannelVideos(encodedUcid, channelName) {
+  const ucid = decodeURIComponent(encodedUcid);
+  _channelViewUcid = ucid;
+  const container = document.getElementById('youtubeResults');
+  container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Cargando videos...</div></div>';
+  try {
+    const res = await fetch(`${API_BASE}/invidious/channel/${ucid}`);
+    if (!res.ok) { container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error</div></div>'; return; }
+    const data = await res.json();
+    youtubeResults = data.filter(r => (r.type === 'video' || r.type === 'shortVideo' || r.videoId));
+    // Add a back button at the top
+    const title = document.getElementById('contentTitle');
+    title.textContent = `📺 ${escapeHtml(channelName || 'Canal')}`;
+    renderYouTubeResults(container);
+  } catch (e) { container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error de conexión</div></div>'; }
+}
+
 async function unsubscribeChannel(encodedUcid, channelName, btnEl) {
   const ucid = decodeURIComponent(encodedUcid);
   if (btnEl) btnEl.textContent = '⋯';
