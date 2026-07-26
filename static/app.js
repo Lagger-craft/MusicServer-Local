@@ -665,8 +665,8 @@ async function loadChannelVideos(encodedUcid, channelName) {
     const res = await fetch(`${API_BASE}/invidious/channel/${ucid}`);
     if (!res.ok) { container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error</div></div>'; return; }
     const data = await res.json();
-    youtubeResults = data.filter(r => (r.type === 'video' || r.type === 'shortVideo' || r.videoId));
-    // Add a back button at the top
+    const videos = Array.isArray(data) ? data : (data.videos || []);
+    youtubeResults = videos.filter(r => (r.type === 'video' || r.type === 'shortVideo' || r.videoId));
     const title = document.getElementById('contentTitle');
     title.textContent = `📺 ${escapeHtml(channelName || 'Canal')}`;
     renderYouTubeResults(container);
