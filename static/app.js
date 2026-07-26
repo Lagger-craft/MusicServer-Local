@@ -516,7 +516,7 @@ function renderYouTubeResults(container) {
     const encodedId = encodeURIComponent(v.videoId);
     const ucid = v.authorId || '';
     const subBtn = invidiousLoggedIn && ucid
-      ? `<button class="track-action-btn" onclick="event.stopPropagation(); subscribeToChannel('${ucid}','${escapeHtml(author).replace(/'/g, "\\'")}')">🔔 Subscribir</button>`
+      ? `<button class="track-action-btn" onclick="event.stopPropagation(); subscribeToChannel('${ucid}','${escapeHtml(author).replace(/'/g, "\\'")}',this)">🔔 Subscribir</button>`
       : '';
     const art = `<img src="${thumbUrl}" alt="" onerror="this.parentElement.innerHTML='<div class=\\'track-art-placeholder\\' style=\\'background:${getTrackColor(i)}\\'>▶</div>'">`;
     return `<div class="track-item" style="cursor:pointer" onclick="playYouTubeVideo('${encodedId}','${escapeHtml(dn).replace(/'/g, "\\'")}')" oncontextmenu="event.preventDefault();event.stopPropagation();showYouTubeContextMenu(event,'${encodedId}','${escapeHtml(dn).replace(/'/g, "\\'")}')">
@@ -620,18 +620,32 @@ async function loadYouTubeSubscriptions() {
   } catch (e) { container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error de conexión</div></div>'; }
 }
 
-async function subscribeToChannel(ucid, channelName) {
+let subscribingChannels = new Set();
+
+async function subscribeToChannel(ucid, channelName, btnEl) {
+  if (subscribingChannels.has(ucid)) return;
+  subscribingChannels.add(ucid);
+  if (btnEl) btnEl.textContent = '⋯';
+
   try {
     const res = await fetch(`${API_BASE}/invidious/subscribe`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ucid }),
     });
-    if (res.status === 401) { invidiousLoggedIn = false; renderImmichSidebar(); showInvidiousLogin(); return; }
-    const text = await res.text();
-    let data;
-    try { data = JSON.parse(text); } catch (_) { data = {}; }
-    if (data.error) { return; }
-  } catch (_) {}
+    if (res.status === 401) {
+      invidiousLoggedIn = false;
+      renderImmichSidebar();
+      showInvidiousLogin();
+      subscribingChannels.delete(ucid);
+      return;
+    }
+    await res.text();
+    if (btnEl) btnEl.textContent = '✅';
+    setTimeout(() => { if (btnEl) btnEl.textContent = '🔔 Subscrito'; }, 1500);
+  } catch (_) {
+    if (btnEl) btnEl.textContent = '🔔 Subscribir';
+  }
+  subscribingChannels.delete(ucid);
 }
 
 /* YouTube Playback (iframe) */
