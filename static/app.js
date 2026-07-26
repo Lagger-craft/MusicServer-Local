@@ -727,11 +727,35 @@ function getInvidiousEmbedHost() {
 function playYouTubeVideo(encodedId, title) {
   const videoId = decodeURIComponent(encodedId);
   closeYouTubePlayer();
+
+  // Fetch video info to check if it's a livestream and get stream URL
+  fetch(`${API_BASE}/invidious/api/v1/videos/${videoId}`).then(r => r.json()).then(data => {
+    if (data.liveNow) {
+      // Livestream: open directly in Invidious (CSP blocks iframe + HLS)
+      window.open(`${getInvidiousEmbedHost()}/watch?v=${videoId}`, '_blank');
+      return;
+    }
+    // Regular video: get direct MP4 stream
+    const stream = (data.formatStreams && data.formatStreams[0]) ||
+                   (data.adaptiveFormats && data.adaptiveFormats.find(f => f.type && f.type.startsWith('video/mp4')));
+    if (!stream || !stream.url) {
+      // Fallback: iframe
+      showYouTubeIframe(videoId, title);
+      return;
+    }
+    // Play via music server proxy to avoid CSP issues
+    playYouTubeDirect(videoId, stream.url, title);
+  }).catch(() => {
+    // Fallback: iframe
+    showYouTubeIframe(videoId, title);
+  });
+}
+
+function showYouTubeIframe(videoId, title) {
   const overlay = document.createElement('div');
   overlay.className = 'youtube-overlay';
   overlay.id = 'youtubeOverlay';
   overlay.onclick = (e) => { if (e.target === overlay) closeYouTubePlayer(); };
-
   const container = document.createElement('div');
   container.className = 'youtube-player-container';
   container.innerHTML = `
@@ -744,6 +768,32 @@ function playYouTubeVideo(encodedId, title) {
   overlay.appendChild(container);
   document.body.appendChild(overlay);
   youtubePlaying = { videoId, title };
+}
+
+function playYouTubeDirect(videoId, streamUrl, title) {
+  stopPlayback();
+  isVideo = true;
+  const player = document.getElementById('playerContainer');
+  const nowPlaying = document.getElementById('nowPlayingSection');
+  const progressSection = document.getElementById('progressSection');
+  const fsBtn = document.getElementById('fullscreenBtn');
+  progressSection.style.display = '';
+  player.innerHTML = `<div id="videoWrapper" class="video-wrapper">
+    <video id="videoPlayer" class="video-player" controls autoplay></video>
+  </div>`;
+  video = document.getElementById('videoPlayer');
+  video.src = streamUrl;
+  video.load();
+  nowPlaying.style.display = 'none';
+  player.style.display = 'block';
+  fsBtn.style.display = 'inline-block';
+  video.onerror = () => { showYouTubeIframe(videoId, title); };
+  video.ontimeupdate = () => { onTimeUpdate(video); };
+  video.onplay = () => { updatePlayPauseBtn(true); };
+  video.onpause = () => { updatePlayPauseBtn(false); };
+  video.onended = () => { playNextInSequence(); };
+  document.getElementById('nowPlayingTitle').textContent = cleanName(title);
+  document.getElementById('nowPlayingArtist').textContent = 'YouTube';
 }
 
 function closeYouTubePlayer() {
