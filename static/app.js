@@ -713,25 +713,18 @@ function playYouTubeVideo(encodedId, title) {
   const videoId = decodeURIComponent(encodedId);
   closeYouTubePlayer();
 
-  // Fetch video info to check if it's a livestream and get stream URL
   fetch(`${API_BASE}/invidious/api/v1/videos/${videoId}`).then(r => r.json()).then(data => {
     if (data.liveNow) {
-      // Livestream: open directly in Invidious (CSP blocks iframe + HLS)
       window.open(`${getInvidiousEmbedHost()}/watch?v=${videoId}`, '_blank');
       return;
     }
-    // Regular video: get direct MP4 stream
-    const stream = (data.formatStreams && data.formatStreams[0]) ||
-                   (data.adaptiveFormats && data.adaptiveFormats.find(f => f.type && f.type.startsWith('video/mp4')));
-    if (!stream || !stream.url) {
-      // Fallback: iframe
+    const stream = (data.formatStreams && data.formatStreams[0]);
+    if (stream && stream.url) {
+      playYouTubeDirect(videoId, stream.url, title);
+    } else {
       showYouTubeIframe(videoId, title);
-      return;
     }
-    // Play via music server proxy to avoid CSP issues
-    playYouTubeDirect(videoId, stream.url, title);
   }).catch(() => {
-    // Fallback: iframe
     showYouTubeIframe(videoId, title);
   });
 }
