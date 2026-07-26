@@ -496,7 +496,7 @@ async function doYouTubeSearch() {
     const res = await fetch(url);
     if (!res.ok) { container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error al buscar</div></div>'; return; }
     const data = await res.json();
-    youtubeResults = data.filter(r => r.type === 'video' || r.videoId);
+    youtubeResults = data.filter(r => (r.type === 'video' || r.type === 'shortVideo' || r.videoId));
     renderYouTubeResults(container);
   } catch (e) {
     container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error de conexión</div></div>';
@@ -542,7 +542,7 @@ async function loadYouTubeTrending() {
     const res = await fetch(`${API_BASE}/invidious/trending`);
     if (!res.ok) { container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error al cargar</div></div>'; return; }
     const data = await res.json();
-    youtubeResults = data.filter(r => r.type === 'video' || r.videoId);
+    youtubeResults = data.filter(r => (r.type === 'video' || r.type === 'shortVideo' || r.videoId));
     renderYouTubeResults(container);
   } catch (e) {
     container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error de conexión</div></div>';
@@ -591,6 +591,7 @@ async function doInvidiousLogin() {
     invidiousLoggedIn = true;
     invidiousUsername = username;
     renderImmichSidebar();
+    showYouTubeSearch();
     loadYouTubeSubscriptions();
   } catch (_) { status.textContent = 'Error de conexión'; }
 }
@@ -613,7 +614,7 @@ async function loadYouTubeSubscriptions() {
       container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error</div></div>'; return;
     }
     const data = await res.json();
-    youtubeResults = data.filter(r => r.type === 'video' || r.videoId);
+    youtubeResults = data.filter(r => (r.type === 'video' || r.type === 'shortVideo' || r.videoId));
     renderYouTubeResults(container);
   } catch (e) { container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error de conexión</div></div>'; }
 }

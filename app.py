@@ -473,7 +473,7 @@ def invidious_feed():
     data, err = invidious_auth_get("/api/v1/auth/feed")
     if err:
         return jsonify({"error": err}), 401
-    return jsonify(data)
+    return jsonify(data.get("videos", []) if isinstance(data, dict) else data)
 
 
 @app.route("/api/invidious/subscribe", methods=["POST"])
