@@ -634,7 +634,7 @@ async function addYouTubeToPlaylist(playlistId, encodedId, title) {
 function renderFolderList() {
   const container = document.getElementById('folderList');
   const allActive = !currentFolder ? ' active' : '';
-  let html = `<div class="folder-item${allActive}" onclick="showAllFolders()">
+  let html = `<div class="folder-item${allActive}" onclick="goHome()">
     <div class="folder-icon">🎵</div>
     <div class="folder-info"><div class="folder-name">Toda la música</div></div>
   </div>`;
@@ -682,19 +682,29 @@ async function removeDir(idx) {
 }
 
 function selectFolder(path) {
+  immichView = null;
+  closeYouTubePlayer();
   currentFolder = path;
   currentPlaylistId = null;
   renderFolderList();
+  renderImmichSidebar();
   renderSidebar();
-  applyFilters();
+  renderContent();
+}
+
+function goHome() {
+  currentFolder = null;
+  currentPlaylistId = null;
+  immichView = null;
+  closeYouTubePlayer();
+  renderFolderList();
+  renderImmichSidebar();
+  renderSidebar();
+  renderContent();
 }
 
 function showAllFolders() {
-  currentFolder = null;
-  currentPlaylistId = null;
-  renderFolderList();
-  renderSidebar();
-  applyFilters();
+  goHome();
 }
 
 function renderContent() {
@@ -863,17 +873,16 @@ function getPlaylistName(id) {
 }
 
 function showAllTracks() {
-  currentPlaylistId = null;
-  currentFolder = null;
-  renderFolderList();
-  applyFilters();
-  renderSidebar();
+  goHome();
 }
 
 function showPlaylist(id) {
+  immichView = null;
+  closeYouTubePlayer();
   currentPlaylistId = id;
   currentFolder = null;
   renderFolderList();
+  renderImmichSidebar();
   renderContent();
   renderSidebar();
 }
@@ -1788,15 +1797,35 @@ document.addEventListener('webkitfullscreenchange', () => {
 
 /* ==================== KEYBOARD SHORTCUTS ==================== */
 document.addEventListener('keydown', (e) => {
-  const el = isVideo ? video : audio;
-  if (!el) return;
-  if (e.key === 'ArrowLeft') { e.preventDefault(); el.currentTime = Math.max(0, el.currentTime - 5); }
-  else if (e.key === 'ArrowRight') { e.preventDefault(); el.currentTime = Math.min(el.duration || 0, el.currentTime + 5); }
-  else if (e.key === ' ') { e.preventDefault(); togglePlayPause(); }
-  else if (e.key === 'ArrowUp') { e.preventDefault(); adjustVolume(0.05); }
-  else if (e.key === 'ArrowDown') { e.preventDefault(); adjustVolume(-0.05); }
-  else if (e.key === 'f' || e.key === 'F') { if (isVideo) toggleFullscreen(); }
-  else if (e.key === 'm' || e.key === 'M') { toggleMute(); }
+  const tag = document.activeElement?.tagName;
+  const isInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+  // Space: play/pause (except when typing in input)
+  if (e.key === ' ') {
+    if (isInput) return;
+    e.preventDefault();
+    if (youtubePlaying) {
+      // Focus iframe for YouTube play/pause via its internal handler
+      const iframe = document.querySelector('.youtube-iframe');
+      if (iframe) iframe.focus();
+      return;
+    }
+    togglePlayPause();
+    return;
+  }
+  // Arrow keys, F, M: only when not typing
+  if (!isInput) {
+    const el = isVideo ? video : audio;
+    if (e.key === 'ArrowLeft' && el) { e.preventDefault(); el.currentTime = Math.max(0, el.currentTime - 5); }
+    else if (e.key === 'ArrowRight' && el) { e.preventDefault(); el.currentTime = Math.min(el.duration || 0, el.currentTime + 5); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); adjustVolume(0.05); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); adjustVolume(-0.05); }
+    else if (e.key === 'f' || e.key === 'F') { if (isVideo) toggleFullscreen(); }
+    else if (e.key === 'm' || e.key === 'M') { toggleMute(); }
+  }
+  // Escape: close YouTube player
+  if (e.key === 'Escape' && youtubePlaying) {
+    closeYouTubePlayer();
+  }
 });
 
 function adjustVolume(delta) {
