@@ -32,6 +32,7 @@ let immichAlbums = [];
 let immichAlbumAssets = [];
 let immichView = null; // null | 'albums' | 'album-<id>'
 let immichAllAssets = [];
+let immichSort = 'default'; // 'default' | 'name' | 'date' | 'name_desc' | 'date_desc'
 
 const trackColors = [
   'linear-gradient(135deg, #8b5cf6, #ec4899)',
@@ -230,7 +231,38 @@ function renderImmichAlbumsView() {
       grid.innerHTML = `<div class="empty-state"><div class="empty-state-icon">🎬</div><div class="empty-state-text">No hay videos en este álbum</div></div>`;
       return;
     }
-    grid.innerHTML = immichAlbumAssets.map(a => {
+    // Sort controls
+    const sortOptions = [
+      ['default', 'Por defecto'],
+      ['name', 'Nombre A→Z'],
+      ['name_desc', 'Nombre Z→A'],
+      ['date', 'Fecha más antigua'],
+      ['date_desc', 'Fecha más reciente'],
+    ];
+    let sortHtml = '<div class="youtube-filters" style="padding:0 0 12px">';
+    sortHtml += '<span class="youtube-filter-label">Ordenar:</span>';
+    sortHtml += sortOptions.map(([val, label]) =>
+      `<button class="sort-btn${immichSort === val ? ' active' : ''}" onclick="setImmichSort('${val}')">${label}</button>`
+    ).join('');
+    sortHtml += '</div>';
+    // Insert sort controls before grid
+    const listView = document.getElementById('listView');
+    listView.style.display = 'none';
+    const gridParent = grid.parentElement;
+    const existingSort = document.getElementById('immichSortBar');
+    if (existingSort) existingSort.remove();
+    const sortBar = document.createElement('div');
+    sortBar.id = 'immichSortBar';
+    sortBar.innerHTML = sortHtml;
+    gridParent.insertBefore(sortBar, grid);
+
+    let sorted = [...immichAlbumAssets];
+    if (immichSort === 'name') sorted.sort((a, b) => naturalCompare(a.originalFileName, b.originalFileName));
+    else if (immichSort === 'name_desc') sorted.sort((a, b) => naturalCompare(b.originalFileName, a.originalFileName));
+    else if (immichSort === 'date') sorted.sort((a, b) => (a.fileCreatedAt || a.createdAt || '').localeCompare(b.fileCreatedAt || b.createdAt || ''));
+    else if (immichSort === 'date_desc') sorted.sort((a, b) => (b.fileCreatedAt || b.createdAt || '').localeCompare(a.fileCreatedAt || a.createdAt || ''));
+
+    grid.innerHTML = sorted.map(a => {
       const dn = (a.originalFileName || a.id).replace(/\.[^/.]+$/, '');
       const thumb = `${API_BASE}/immich/thumbnail/${a.id}`;
       const encodedId = encodeURIComponent(a.id);
@@ -244,6 +276,31 @@ function renderImmichAlbumsView() {
       </div>`;
     }).join('');
   }
+}
+
+function naturalCompare(a, b) {
+  const re = /(\d+)|(\D+)/g;
+  const partsA = (a || '').match(re) || [];
+  const partsB = (b || '').match(re) || [];
+  for (let i = 0; i < Math.max(partsA.length, partsB.length); i++) {
+    const pa = partsA[i], pb = partsB[i];
+    if (pa === undefined) return -1;
+    if (pb === undefined) return 1;
+    if (pa === pb) continue;
+    const na = parseInt(pa, 10), nb = parseInt(pb, 10);
+    if (!isNaN(na) && !isNaN(nb)) {
+      if (na !== nb) return na - nb;
+    } else {
+      if (pa < pb) return -1;
+      if (pa > pb) return 1;
+    }
+  }
+  return 0;
+}
+
+function setImmichSort(sort) {
+  immichSort = sort;
+  renderImmichAlbumsView();
 }
 
 function showImmichAddMenu(event, encodedId, name) {
