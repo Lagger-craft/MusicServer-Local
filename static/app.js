@@ -652,7 +652,7 @@ async function loadYouTubeSubscriptions() {
   const container = document.getElementById('youtubeResults');
   container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Cargando suscripciones...</div></div>';
   try {
-    const res = await fetch(`${API_BASE}/invidious/feed`);
+    const res = await fetch(`${API_BASE}/invidious/feed?max_results=50`);
     if (!res.ok) {
       if (res.status === 401) { invidiousLoggedIn = false; renderImmichSidebar(); showInvidiousLogin(); return; }
       container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error</div></div>'; return;

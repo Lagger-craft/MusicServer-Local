@@ -1,3 +1,4 @@
+import concurrent.futures
 import json
 import os
 import time
@@ -479,12 +480,61 @@ def invidious_subscriptions():
     return jsonify(data)
 
 
+_feed_cache = {"data": None, "updated": 0, "ttl": 300}
+
 @app.route("/api/invidious/feed")
 def invidious_feed():
-    data, err = invidious_auth_get("/api/v1/auth/feed")
+    max_results = int(request.args.get("max_results", "50"))
+
+    now = time.time()
+    cached = _feed_cache["data"]
+    if cached and (now - _feed_cache["updated"]) < _feed_cache["ttl"]:
+        return jsonify(cached[:max_results])
+
+    subs, err = invidious_auth_get("/api/v1/auth/subscriptions")
     if err:
         return jsonify({"error": err}), 401
-    return jsonify(data.get("videos", []) if isinstance(data, dict) else data)
+    if not subs:
+        return jsonify([])
+
+    base = get_invidious_url()
+    if not base:
+        return jsonify([])
+
+    videos = []
+    seen = set()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+        futures = {
+            pool.submit(
+                requests.get,
+                base + f"/api/v1/channels/{ch.get('authorId') or ch.get('ucid') or ''}/videos",
+                params={"sort": "newest"},
+                timeout=10,
+            ): ch
+            for ch in subs if ch.get("authorId") or ch.get("ucid")
+        }
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                resp = future.result()
+                if not resp.ok:
+                    continue
+                channel_data = resp.json()
+                channel_videos = channel_data if isinstance(channel_data, list) else channel_data.get("videos", [])
+                for v in channel_videos[:5]:
+                    vid = v.get("videoId")
+                    if vid and vid not in seen:
+                        seen.add(vid)
+                        videos.append(v)
+            except Exception:
+                continue
+
+    videos.sort(key=lambda v: v.get("published") or 0, reverse=True)
+
+    _feed_cache["data"] = videos
+    _feed_cache["updated"] = time.time()
+
+    return jsonify(videos[:max_results])
 
 
 @app.route("/api/invidious/subscribe", methods=["POST"])
