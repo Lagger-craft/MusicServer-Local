@@ -452,7 +452,8 @@ async function showYouTubeSearch() {
   const trackList = document.getElementById('trackList');
   const authArea = invidiousLoggedIn
     ? `<span class="yt-user-badge">👤 ${escapeHtml(invidiousUsername)}</span>
-       <button class="add-all-btn" onclick="loadYouTubeSubscriptions()" style="padding:8px 14px">📺 Subscripciones</button>
+       <button class="add-all-btn" onclick="loadYouTubeSubscriptions()" style="padding:8px 14px">📺 Feed</button>
+       <button class="add-all-btn" onclick="loadYouTubeChannels()" style="padding:8px 14px">📋 Canales</button>
        <button class="add-all-btn" onclick="doInvidiousLogout()" style="padding:8px 14px">Cerrar sesión</button>`
     : `<button class="add-all-btn" onclick="showInvidiousLogin()" style="padding:8px 14px">🔑 Iniciar sesión</button>`;
   trackList.innerHTML = `<div class="youtube-topbar">${authArea}</div>
@@ -618,6 +619,52 @@ async function loadYouTubeSubscriptions() {
     youtubeResults = data.filter(r => (r.type === 'video' || r.type === 'shortVideo' || r.videoId));
     renderYouTubeResults(container);
   } catch (e) { container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error de conexión</div></div>'; }
+}
+
+async function loadYouTubeChannels() {
+  const container = document.getElementById('youtubeResults');
+  container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Cargando canales...</div></div>';
+  try {
+    const res = await fetch(`${API_BASE}/invidious/subscriptions`);
+    if (!res.ok) {
+      if (res.status === 401) { invidiousLoggedIn = false; renderImmichSidebar(); showInvidiousLogin(); return; }
+      container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error</div></div>'; return;
+    }
+    const channels = await res.json();
+    if (!channels.length) {
+      container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📋</div><div class="empty-state-text">Sin canales subscritos. Buscá un canal y presioná 🔔 Subscribir.</div></div>';
+      return;
+    }
+    container.innerHTML = channels.map((c, i) => {
+      const encodedUcid = encodeURIComponent(c.authorId);
+      return `<div class="track-item" style="cursor:default">
+        <span class="track-number">${i + 1}</span>
+        <div class="track-art">
+          <div class="track-art-placeholder" style="background:${getTrackColor(i)}">📺</div>
+        </div>
+        <div class="track-info">
+          <div class="track-title">${escapeHtml(c.author)}</div>
+          <div class="track-meta">${escapeHtml(c.authorId)}</div>
+        </div>
+        <div class="track-actions">
+          <button class="track-action-btn remove" onclick="event.stopPropagation(); unsubscribeChannel('${encodedUcid}','${escapeHtml(c.author).replace(/'/g, "\\'")}',this)">✕ Subscripción</button>
+        </div>
+      </div>`;
+    }).join('');
+  } catch (e) { container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error de conexión</div></div>'; }
+}
+
+async function unsubscribeChannel(encodedUcid, channelName, btnEl) {
+  const ucid = decodeURIComponent(encodedUcid);
+  if (btnEl) btnEl.textContent = '⋯';
+  try {
+    const res = await fetch(`${API_BASE}/invidious/unsubscribe`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ucid }),
+    });
+    if (res.status === 401) { invidiousLoggedIn = false; renderImmichSidebar(); showInvidiousLogin(); return; }
+    loadYouTubeChannels();
+  } catch (_) { if (btnEl) btnEl.textContent = '✕ Subscripción'; }
 }
 
 let subscribingChannels = new Set();
