@@ -44,6 +44,9 @@ services:
           host: invidious-db
           port: 5432
         check_tables: true
+        registration_enabled: true
+        captcha_enabled: false
+        login_enabled: true
         hmac_key: "4b6a5afbdde5089a07854c01f8e5e296"
         invidious_companion:
           - private_url: "http://companion:8282/companion"

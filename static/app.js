@@ -22,6 +22,9 @@ let isVideo = false;
 /* ==================== YOUTUBE STATE ==================== */
 let youtubeResults = [];
 let youtubePlaying = null; // {videoId, title} when iframe is open
+let invidiousLoggedIn = false;
+let invidiousUsername = '';
+let youtubeFeed = [];
 
 /* ==================== IMMICH STATE ==================== */
 let immichConfig = { url: '', connected: false };
@@ -137,9 +140,11 @@ function renderImmichSidebar() {
     <div class="folder-info"><div class="folder-name">Immich</div></div>
     <span class="immich-status-dot" title="${immichConfig.connected ? 'Conectado' : 'Desconectado'}">${dot}</span>
   </div>`;
+  const ytDot = invidiousLoggedIn ? '🟢' : '⚪';
   html += `<div class="folder-item" onclick="showYouTubeSearch()">
     <div class="folder-icon" style="background:var(--gradient-accent);color:white;">▶</div>
     <div class="folder-info"><div class="folder-name">YouTube</div></div>
+    <span class="immich-status-dot" title="${invidiousLoggedIn ? 'Conectado' : 'Sin sesión'}">${ytDot}</span>
   </div>`;
   container.innerHTML = html;
 }
@@ -445,7 +450,13 @@ async function showYouTubeSearch() {
   document.getElementById('gridView').style.display = 'none';
 
   const trackList = document.getElementById('trackList');
-  trackList.innerHTML = `<div class="youtube-search-bar">
+  const authArea = invidiousLoggedIn
+    ? `<span style="color:var(--text-tertiary);font-size:12px">${escapeHtml(invidiousUsername)}</span>
+       <button class="add-all-btn" onclick="loadYouTubeSubscriptions()" style="padding:8px 14px">📺 Subscripciones</button>
+       <button class="add-all-btn" onclick="doInvidiousLogout()" style="padding:8px 14px">Cerrar sesión</button>`
+    : `<button class="add-all-btn" onclick="showInvidiousLogin()" style="padding:8px 14px">🔑 Iniciar sesión</button>`;
+  trackList.innerHTML = `<div class="youtube-topbar">${authArea}</div>
+  <div class="youtube-search-bar">
     <input type="text" id="youtubeQuery" placeholder="Buscar en YouTube..." onkeypress="if(event.key==='Enter')doYouTubeSearch()">
     <button class="play-all-btn" onclick="doYouTubeSearch()" style="padding:12px 24px">🔍 Buscar</button>
     <button class="add-all-btn" onclick="loadYouTubeTrending()" style="padding:12px 20px">🔥 Tendencias</button>
@@ -503,6 +514,10 @@ function renderYouTubeResults(container) {
     const author = v.author || 'Desconocido';
     const duration = v.lengthSeconds ? formatTime(v.lengthSeconds) : '';
     const encodedId = encodeURIComponent(v.videoId);
+    const ucid = v.authorId || '';
+    const subBtn = invidiousLoggedIn && ucid
+      ? `<button class="track-action-btn" onclick="event.stopPropagation(); subscribeToChannel('${ucid}','${escapeHtml(author).replace(/'/g, "\\'")}')">🔔 Subscribir</button>`
+      : '';
     const art = `<img src="${thumbUrl}" alt="" onerror="this.parentElement.innerHTML='<div class=\\'track-art-placeholder\\' style=\\'background:${getTrackColor(i)}\\'>▶</div>'">`;
     return `<div class="track-item" style="cursor:pointer" onclick="playYouTubeVideo('${encodedId}','${escapeHtml(dn).replace(/'/g, "\\'")}')" oncontextmenu="event.preventDefault();event.stopPropagation();showYouTubeContextMenu(event,'${encodedId}','${escapeHtml(dn).replace(/'/g, "\\'")}')">
       <span class="track-number">${i + 1}</span>
@@ -512,6 +527,7 @@ function renderYouTubeResults(container) {
         <div class="track-meta">${escapeHtml(author)}${duration ? ' · ' + duration : ''}</div>
       </div>
       <div class="track-actions">
+        ${subBtn}
         <button class="track-action-btn queue" onclick="event.stopPropagation(); addYouTubeToQueue('${encodedId}','${escapeHtml(dn).replace(/'/g, "\\'")}')">⬇ Cola</button>
         <button class="track-action-btn" onclick="event.stopPropagation(); showYouTubeAddMenu(event,'${encodedId}','${escapeHtml(dn).replace(/'/g, "\\'")}')">+ Añadir</button>
       </div>
@@ -531,6 +547,87 @@ async function loadYouTubeTrending() {
   } catch (e) {
     container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error de conexión</div></div>';
   }
+}
+
+/* ── Invidious Auth ── */
+
+async function checkInvidiousAuth() {
+  try {
+    const res = await fetch(`${API_BASE}/invidious/status`);
+    const data = await res.json();
+    invidiousLoggedIn = data.logged_in;
+    renderImmichSidebar();
+  } catch (_) {}
+}
+
+async function showInvidiousLogin() {
+  const container = document.getElementById('youtubeResults');
+  container.innerHTML = `<div class="invidious-login-form">
+    <h3>Iniciar sesión en Invidious</h3>
+    <p style="color:var(--text-tertiary);font-size:13px;margin-bottom:16px">Necesitás una cuenta en Invidious (creala en http://localhost:3000)</p>
+    <input type="text" id="invidiousUserInput" placeholder="Usuario" onkeypress="if(event.key==='Enter')document.getElementById('invidiousPassInput').focus()">
+    <input type="password" id="invidiousPassInput" placeholder="Contraseña" onkeypress="if(event.key==='Enter')doInvidiousLogin()">
+    <div id="invidiousLoginStatus" style="font-size:13px;color:var(--accent-rose);margin-bottom:12px"></div>
+    <div class="modal-buttons">
+      <button class="modal-btn cancel" onclick="showYouTubeSearch()">Cancelar</button>
+      <button class="modal-btn confirm" onclick="doInvidiousLogin()">Iniciar sesión</button>
+    </div>
+  </div>`;
+}
+
+async function doInvidiousLogin() {
+  const username = document.getElementById('invidiousUserInput').value.trim();
+  const password = document.getElementById('invidiousPassInput').value.trim();
+  const status = document.getElementById('invidiousLoginStatus');
+  if (!username || !password) { status.textContent = 'Completa ambos campos'; return; }
+  status.textContent = 'Conectando...';
+  try {
+    const res = await fetch(`${API_BASE}/invidious/login`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await res.json();
+    if (data.error) { status.textContent = data.error; return; }
+    invidiousLoggedIn = true;
+    invidiousUsername = username;
+    renderImmichSidebar();
+    loadYouTubeSubscriptions();
+  } catch (_) { status.textContent = 'Error de conexión'; }
+}
+
+async function doInvidiousLogout() {
+  await fetch(`${API_BASE}/invidious/logout`, { method: 'POST' });
+  invidiousLoggedIn = false;
+  invidiousUsername = '';
+  renderImmichSidebar();
+  showYouTubeSearch();
+}
+
+async function loadYouTubeSubscriptions() {
+  const container = document.getElementById('youtubeResults');
+  container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Cargando suscripciones...</div></div>';
+  try {
+    const res = await fetch(`${API_BASE}/invidious/feed`);
+    if (!res.ok) {
+      if (res.status === 401) { invidiousLoggedIn = false; renderImmichSidebar(); showInvidiousLogin(); return; }
+      container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error</div></div>'; return;
+    }
+    const data = await res.json();
+    youtubeResults = data.filter(r => r.type === 'video' || r.videoId);
+    renderYouTubeResults(container);
+  } catch (e) { container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error de conexión</div></div>'; }
+}
+
+async function subscribeToChannel(ucid, channelName) {
+  try {
+    const res = await fetch(`${API_BASE}/invidious/subscribe`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ucid }),
+    });
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+    alert(`Subscrito a ${channelName || 'canal'}`);
+  } catch (_) { alert('Error al subscribir'); }
 }
 
 /* YouTube Playback (iframe) */
@@ -2078,3 +2175,4 @@ loadFiles();
 loadPlaylists();
 loadFolders();
 loadImmichConfig();
+checkInvidiousAuth();

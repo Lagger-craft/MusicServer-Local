@@ -1814,6 +1814,48 @@ body {
   border-color: var(--accent-primary);
 }
 
+.youtube-topbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 12px;
+}
+
+.invidious-login-form {
+  max-width: 400px;
+  margin: 40px auto;
+  text-align: center;
+}
+
+.invidious-login-form h3 {
+  font-size: 20px;
+  margin-bottom: 8px;
+  background: var(--gradient-accent);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.invidious-login-form input {
+  width: 100%;
+  padding: 14px 18px;
+  background: var(--bg-input);
+  border: 2px solid var(--border-color);
+  border-radius: 12px;
+  color: var(--text-primary);
+  font-size: 14px;
+  outline: none;
+  margin-bottom: 12px;
+  transition: border-color 0.3s;
+}
+
+.invidious-login-form input:focus {
+  border-color: var(--accent-primary);
+}
+
 .youtube-filters {
   display: flex;
   align-items: center;

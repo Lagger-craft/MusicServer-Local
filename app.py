@@ -369,6 +369,145 @@ def invidious_proxy(subpath):
         return jsonify({"error": str(e)}), 500
 
 
+def get_invidious_sid():
+    cfg = get_config()
+    return cfg.get("invidious_sid", "")
+
+
+def save_invidious_sid(sid):
+    cfg = get_config()
+    cfg["invidious_sid"] = sid
+    update_config(cfg)
+
+
+def invidious_auth_headers():
+    sid = get_invidious_sid()
+    h = {"Content-Type": "application/json"}
+    if sid:
+        h["Cookie"] = f"SID={sid}"
+    return h
+
+
+@app.route("/api/invidious/login", methods=["POST"])
+def invidious_login():
+    data = request.json
+    username = (data or {}).get("username", "")
+    password = (data or {}).get("password", "")
+    if not username or not password:
+        return jsonify({"error": "Usuario y contraseña requeridos"}), 400
+    base = get_invidious_url()
+    if not base:
+        return jsonify({"error": "Invidious no disponible"}), 503
+    try:
+        # Login via Invidious form endpoint (returns SID cookie)
+        resp = requests.post(base + "/login",
+                             data={"email": username, "password": password,
+                                   "action": "login", "referer": ""},
+                             timeout=15, allow_redirects=False)
+        sid = resp.cookies.get("SID", "")
+        if not sid:
+            return jsonify({"error": "Credenciales inválidas"}), 401
+        save_invidious_sid(sid)
+        return jsonify({"status": "ok", "username": username})
+    except requests.ConnectionError:
+        return jsonify({"error": "No se pudo conectar con Invidious"}), 503
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/invidious/logout", methods=["POST"])
+def invidious_logout():
+    save_invidious_sid("")
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/invidious/status")
+def invidious_status():
+    base = get_invidious_url()
+    sid = get_invidious_sid()
+    return jsonify({
+        "connected": base is not None,
+        "logged_in": bool(sid),
+    })
+
+
+def invidious_auth_get(path):
+    base = get_invidious_url()
+    if not base:
+        return None, "Invidious no disponible"
+    try:
+        resp = requests.get(base + path, headers=invidious_auth_headers(), timeout=15)
+        if resp.status_code == 401:
+            return None, "Sesión expirada"
+        resp.raise_for_status()
+        return resp.json(), None
+    except Exception as e:
+        return None, str(e)
+
+
+def invidious_auth_post(path, data=None):
+    base = get_invidious_url()
+    if not base:
+        return None, "Invidious no disponible"
+    try:
+        resp = requests.post(base + path, json=data or {},
+                             headers=invidious_auth_headers(), timeout=15)
+        if resp.status_code == 401:
+            return None, "Sesión expirada"
+        resp.raise_for_status()
+        return resp.json(), None
+    except Exception as e:
+        return None, str(e)
+
+
+@app.route("/api/invidious/subscriptions", methods=["GET"])
+def invidious_subscriptions():
+    data, err = invidious_auth_get("/api/v1/auth/subscriptions")
+    if err:
+        return jsonify({"error": err}), 401
+    return jsonify(data)
+
+
+@app.route("/api/invidious/feed")
+def invidious_feed():
+    data, err = invidious_auth_get("/api/v1/auth/feed")
+    if err:
+        return jsonify({"error": err}), 401
+    return jsonify(data)
+
+
+@app.route("/api/invidious/subscribe", methods=["POST"])
+def invidious_subscribe():
+    data = request.json
+    ucid = (data or {}).get("ucid", "")
+    if not ucid:
+        return jsonify({"error": "ucid requerido"}), 400
+    data, err = invidious_auth_post(f"/api/v1/auth/subscriptions/{ucid}")
+    if err:
+        return jsonify({"error": err}), 401
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/invidious/unsubscribe", methods=["POST"])
+def invidious_unsubscribe():
+    data = request.json
+    ucid = (data or {}).get("ucid", "")
+    if not ucid:
+        return jsonify({"error": "ucid requerido"}), 400
+    base = get_invidious_url()
+    if not base:
+        return jsonify({"error": "Invidious no disponible"}), 503
+    try:
+        resp = requests.delete(base + f"/api/v1/auth/subscriptions/{ucid}",
+                               headers=invidious_auth_headers(), timeout=15)
+        if resp.status_code == 401:
+            return jsonify({"error": "Sesión expirada"}), 401
+        resp.raise_for_status()
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/immich/config", methods=["GET"])
 def get_immich_config_api():
     cfg = get_immich_config()
