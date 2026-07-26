@@ -1814,6 +1814,39 @@ body {
   border-color: var(--accent-primary);
 }
 
+.youtube-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 0 12px;
+  flex-wrap: wrap;
+}
+
+.youtube-filter-label {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.youtube-filter-select {
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.2s;
+  margin-right: 12px;
+}
+
+.youtube-filter-select:focus {
+  border-color: var(--accent-primary);
+}
+
 /* YouTube player overlay */
 .youtube-overlay {
   position: fixed;

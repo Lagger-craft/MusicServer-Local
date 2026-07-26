@@ -324,11 +324,28 @@ def invidious_search():
     q = request.args.get("q", "").strip()
     if not q:
         return jsonify({"error": "Query requerida"}), 400
+    sort = request.args.get("sort", "relevance")
+    date = request.args.get("date", "")
     base = get_invidious_url()
     if not base:
         return jsonify({"error": "Invidious no disponible"}), 503
     try:
-        resp = requests.get(base + "/api/v1/search", params={"q": q}, timeout=15)
+        params = {"q": q, "sort": sort, "type": "video"}
+        if date:
+            params["date"] = date
+        resp = requests.get(base + "/api/v1/search", params=params, timeout=15)
+        return jsonify(resp.json())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/invidious/trending")
+def invidious_trending():
+    base = get_invidious_url()
+    if not base:
+        return jsonify({"error": "Invidious no disponible"}), 503
+    try:
+        resp = requests.get(base + "/api/v1/trending", timeout=15)
         return jsonify(resp.json())
     except Exception as e:
         return jsonify({"error": str(e)}), 500

@@ -448,6 +448,25 @@ async function showYouTubeSearch() {
   trackList.innerHTML = `<div class="youtube-search-bar">
     <input type="text" id="youtubeQuery" placeholder="Buscar en YouTube..." onkeypress="if(event.key==='Enter')doYouTubeSearch()">
     <button class="play-all-btn" onclick="doYouTubeSearch()" style="padding:12px 24px">🔍 Buscar</button>
+    <button class="add-all-btn" onclick="loadYouTubeTrending()" style="padding:12px 20px">🔥 Tendencias</button>
+  </div>
+  <div class="youtube-filters">
+    <span class="youtube-filter-label">Ordenar:</span>
+    <select id="youtubeSort" class="youtube-filter-select" onchange="if(document.getElementById('youtubeQuery').value)doYouTubeSearch()">
+      <option value="relevance">Relevancia</option>
+      <option value="date">Más nuevos</option>
+      <option value="views">Más vistos</option>
+      <option value="rating">Mejor valorados</option>
+    </select>
+    <span class="youtube-filter-label">Fecha:</span>
+    <select id="youtubeDate" class="youtube-filter-select" onchange="if(document.getElementById('youtubeQuery').value)doYouTubeSearch()">
+      <option value="">Cualquier fecha</option>
+      <option value="hour">Última hora</option>
+      <option value="today">Hoy</option>
+      <option value="week">Esta semana</option>
+      <option value="month">Este mes</option>
+      <option value="year">Este año</option>
+    </select>
   </div>
   <div id="youtubeResults"></div>`;
   document.getElementById('youtubeQuery').focus();
@@ -456,43 +475,59 @@ async function showYouTubeSearch() {
 async function doYouTubeSearch() {
   const q = document.getElementById('youtubeQuery').value.trim();
   if (!q) return;
+  const sort = document.getElementById('youtubeSort').value;
+  const date = document.getElementById('youtubeDate').value;
   const container = document.getElementById('youtubeResults');
   container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Buscando...</div></div>';
   try {
-    const res = await fetch(`${API_BASE}/invidious/search?q=${encodeURIComponent(q)}`);
+    let url = `${API_BASE}/invidious/search?q=${encodeURIComponent(q)}&sort=${sort}`;
+    if (date) url += `&date=${date}`;
+    const res = await fetch(url);
     if (!res.ok) { container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error al buscar</div></div>'; return; }
     const data = await res.json();
-    // Filter only video results
     youtubeResults = data.filter(r => r.type === 'video' || r.videoId);
-    if (youtubeResults.length === 0) {
-      container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">▶</div><div class="empty-state-text">Sin resultados</div></div>';
-      return;
-    }
-    container.innerHTML = youtubeResults.map((v, i) => {
-      const dn = v.title || 'Sin título';
-      const thumb = v.videoThumbnails && v.videoThumbnails.length > 0
-        ? v.videoThumbnails.find(t => t.quality === 'medium') || v.videoThumbnails[0]
-        : null;
-      const thumbUrl = thumb ? thumb.url : '';
-      const author = v.author || 'Desconocido';
-      const duration = v.lengthSeconds ? formatTime(v.lengthSeconds) : '';
-      const encodedId = encodeURIComponent(v.videoId);
-      const art = thumbUrl
-        ? `<img src="${thumbUrl}" alt="" onerror="this.parentElement.innerHTML='<div class=\\'track-art-placeholder\\' style=\\'background:${getTrackColor(i)}\\'>▶</div>'">`
-        : `<div class="track-art-placeholder" style="background:${getTrackColor(i)};">▶</div>`;
-      return `<div class="track-item" style="cursor:pointer" onclick="playYouTubeVideo('${encodedId}','${escapeHtml(dn).replace(/'/g, "\\'")}')" oncontextmenu="event.preventDefault();event.stopPropagation();showYouTubeContextMenu(event,'${encodedId}','${escapeHtml(dn).replace(/'/g, "\\'")}')">
-        <span class="track-number">${i + 1}</span>
-        <div class="track-art">${art}</div>
-        <div class="track-info">
-          <div class="track-title">${escapeHtml(dn)}</div>
-          <div class="track-meta">${escapeHtml(author)}${duration ? ' · ' + duration : ''}</div>
-        </div>
-        <div class="track-actions">
-          <button class="track-action-btn queue" onclick="event.stopPropagation(); addYouTubeToQueue('${encodedId}','${escapeHtml(dn).replace(/'/g, "\\'")}')">⬇ Cola</button>
-          <button class="track-action-btn" onclick="event.stopPropagation(); showYouTubeAddMenu(event,'${encodedId}','${escapeHtml(dn).replace(/'/g, "\\'")}')">+ Añadir</button>
-        </div>
-      </div>`;
-    }).join('');
+    renderYouTubeResults(container);
+  } catch (e) {
+    container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error de conexión</div></div>';
+  }
+}
+
+function renderYouTubeResults(container) {
+  if (youtubeResults.length === 0) {
+    container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">▶</div><div class="empty-state-text">Sin resultados</div></div>';
+    return;
+  }
+  container.innerHTML = youtubeResults.map((v, i) => {
+    const dn = v.title || 'Sin título';
+    const thumbUrl = `https://i.ytimg.com/vi/${v.videoId}/mqdefault.jpg`;
+    const author = v.author || 'Desconocido';
+    const duration = v.lengthSeconds ? formatTime(v.lengthSeconds) : '';
+    const encodedId = encodeURIComponent(v.videoId);
+    const art = `<img src="${thumbUrl}" alt="" onerror="this.parentElement.innerHTML='<div class=\\'track-art-placeholder\\' style=\\'background:${getTrackColor(i)}\\'>▶</div>'">`;
+    return `<div class="track-item" style="cursor:pointer" onclick="playYouTubeVideo('${encodedId}','${escapeHtml(dn).replace(/'/g, "\\'")}')" oncontextmenu="event.preventDefault();event.stopPropagation();showYouTubeContextMenu(event,'${encodedId}','${escapeHtml(dn).replace(/'/g, "\\'")}')">
+      <span class="track-number">${i + 1}</span>
+      <div class="track-art">${art}</div>
+      <div class="track-info">
+        <div class="track-title">${escapeHtml(dn)}</div>
+        <div class="track-meta">${escapeHtml(author)}${duration ? ' · ' + duration : ''}</div>
+      </div>
+      <div class="track-actions">
+        <button class="track-action-btn queue" onclick="event.stopPropagation(); addYouTubeToQueue('${encodedId}','${escapeHtml(dn).replace(/'/g, "\\'")}')">⬇ Cola</button>
+        <button class="track-action-btn" onclick="event.stopPropagation(); showYouTubeAddMenu(event,'${encodedId}','${escapeHtml(dn).replace(/'/g, "\\'")}')">+ Añadir</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function loadYouTubeTrending() {
+  const container = document.getElementById('youtubeResults');
+  container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Cargando tendencias...</div></div>';
+  try {
+    const res = await fetch(`${API_BASE}/invidious/trending`);
+    if (!res.ok) { container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error al cargar</div></div>'; return; }
+    const data = await res.json();
+    youtubeResults = data.filter(r => r.type === 'video' || r.videoId);
+    renderYouTubeResults(container);
   } catch (e) {
     container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error de conexión</div></div>';
   }
@@ -694,19 +729,23 @@ function renderTrackList() {
     const sp = encodeURIComponent(track.path);
     const dn = cleanName(track.name);
     const isImmich = track.type === 'immich';
-    const cu = isImmich ? `${API_BASE}/immich/thumbnail/${track.assetId}` : getCoverUrl(track);
-    const icon = (isImmich || track.type === 'video') ? '🎬' : '♪';
+    const isYouTube = track.type === 'youtube';
+    const cu = isImmich ? `${API_BASE}/immich/thumbnail/${track.assetId}`
+      : isYouTube ? `https://i.ytimg.com/vi/${track.videoId}/mqdefault.jpg`
+      : getCoverUrl(track);
+    const icon = (isImmich || isYouTube || track.type === 'video') ? '🎬' : '♪';
     const art = cu
       ? `<img src="${cu}" alt="${escapeHtml(dn)}" onerror="this.parentElement.innerHTML='<div class=\\'track-art-placeholder\\' style=\\'background: ${getTrackColor(i)}\\'>${icon}</div>'">`
       : `<div class="track-art-placeholder" style="background: ${getTrackColor(i)};">${icon}</div>`;
+    const metaText = isYouTube ? (track.author || 'YouTube') : track.path;
     const actions = renderTrackActions(sp, track);
     return `
     <div class="track-item" data-path="${sp}" data-idx="${i}" onclick="playTrack('${sp}')" oncontextmenu="event.preventDefault();event.stopPropagation();showTrackContextMenu(event,'${sp}')">
       <span class="track-number">${i + 1}</span>
       <div class="track-art">${art}</div>
       <div class="track-info">
-        <div class="track-title">${escapeHtml(dn)}${isImmich || track.type === 'video' ? ' <span style="font-size:11px;color:var(--accent-pink);font-weight:400">🎬</span>' : ''}</div>
-        <div class="track-meta">${escapeHtml(track.path)}</div>
+        <div class="track-title">${escapeHtml(dn)}${isImmich || isYouTube || track.type === 'video' ? ' <span style="font-size:11px;color:var(--accent-pink);font-weight:400">🎬</span>' : ''}</div>
+        <div class="track-meta">${escapeHtml(metaText)}</div>
       </div>
       <div class="track-actions">${actions}</div>
     </div>`;
@@ -743,16 +782,20 @@ function renderGridView() {
     const sp = encodeURIComponent(track.path);
     const dn = cleanName(track.name);
     const isImmich = track.type === 'immich';
-    const cu = isImmich ? `${API_BASE}/immich/thumbnail/${track.assetId}` : getCoverUrl(track);
-    const icon = (isImmich || track.type === 'video') ? '🎬' : '♪';
+    const isYouTube = track.type === 'youtube';
+    const cu = isImmich ? `${API_BASE}/immich/thumbnail/${track.assetId}`
+      : isYouTube ? `https://i.ytimg.com/vi/${track.videoId}/mqdefault.jpg`
+      : getCoverUrl(track);
+    const icon = (isImmich || isYouTube || track.type === 'video') ? '🎬' : '♪';
     const art = cu
       ? `<img src="${cu}" alt="${escapeHtml(dn)}" onerror="this.parentElement.innerHTML='<div class=\\'grid-art-placeholder\\' style=\\'background: ${getTrackColor(i)}\\'>${icon}</div>'">`
       : `<div class="grid-art-placeholder" style="background: ${getTrackColor(i)};">${icon}</div>`;
+    const metaText = isYouTube ? (track.author || 'YouTube') : track.path;
     return `
     <div class="grid-item" data-path="${sp}" data-idx="${i}" onclick="playTrack('${sp}')" oncontextmenu="event.preventDefault();event.stopPropagation();showTrackContextMenu(event,'${sp}')">
       <div class="grid-art">${art}<button class="grid-play-btn" onclick="event.stopPropagation(); playTrack('${sp}')">▶</button></div>
-      <div class="grid-title">${escapeHtml(dn)}${isImmich || track.type === 'video' ? ' <span style="font-size:11px;color:var(--accent-pink)">🎬</span>' : ''}</div>
-      <div class="grid-meta">${escapeHtml(track.path)}</div>
+      <div class="grid-title">${escapeHtml(dn)}${isImmich || isYouTube || track.type === 'video' ? ' <span style="font-size:11px;color:var(--accent-pink)">🎬</span>' : ''}</div>
+      <div class="grid-meta">${escapeHtml(metaText)}</div>
     </div>`;
   }).join('');
 }
@@ -805,7 +848,8 @@ function getVisibleTracks() {
         videoId: song.videoId,
         name: song.name || 'Video',
         path: `youtube:${song.videoId}`,
-        cover: null,
+        cover: `https://i.ytimg.com/vi/${song.videoId}/mqdefault.jpg`,
+        author: song.author || 'YouTube',
       });
     }
   }
