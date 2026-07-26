@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Server Music Player</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="app">
+    <!-- Topbar -->
+    <div class="topbar">
+      <div class="logo">
+        <div class="logo-icon">♪</div>
+        <span class="logo-text">Music Server</span>
+      </div>
+      <div class="topbar-controls">
+        <input type="text" class="search-box" placeholder="Buscar canciones..." id="searchInput" oninput="filterTracks()">
+        <div class="view-toggle">
+          <button class="view-btn active" onclick="setView('list')">Lista</button>
+          <button class="view-btn" onclick="setView('grid')">Cuadrícula</button>
+        </div>
+        <button class="theme-toggle" onclick="toggleTheme()" title="Cambiar tema" id="themeToggle">🌙</button>
+      </div>
+    </div>
+
+    <!-- Main Layout -->
+    <div class="main-layout">
+      <!-- Sidebar -->
+      <div class="sidebar">
+        <div class="sidebar-header">
+          <span class="sidebar-title">Navegar</span>
+        </div>
+        <div class="folder-list" id="folderList"></div>
+        <div class="sidebar-divider"></div>
+        <div class="immich-sidebar" id="immichSidebar"></div>
+        <div class="sidebar-divider"></div>
+        <div class="sidebar-header">
+          <span class="sidebar-title">Playlists</span>
+          <button class="new-playlist-btn" onclick="showCreateModal()" title="Nueva playlist">+</button>
+        </div>
+        <div class="playlist-list" id="playlistList"></div>
+      </div>
+
+      <!-- Content -->
+      <div class="content-area">
+        <div class="content-header">
+          <h2 class="content-title" id="contentTitle">Todas las canciones</h2>
+          <div class="content-actions">
+            <button class="play-all-btn" onclick="playAll()">▶ Reproducir todo</button>
+            <button class="add-all-btn" id="addToPlaylistBtn" onclick="showAddVisibleModal()" title="Agregar a playlist">➕ Playlist</button>
+          </div>
+        </div>
+        <div class="content-body">
+          <div id="listView">
+            <div class="track-list" id="trackList"></div>
+          </div>
+          <div id="gridView" style="display: none;">
+            <div class="grid-container" id="gridList"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Player Bar -->
+    <div class="player-bar" id="playerBar">
+      <div class="now-playing-info" id="nowPlayingSection">
+        <div class="now-playing-art" id="nowPlayingArt">
+          <div class="now-playing-art-placeholder" style="background: linear-gradient(135deg, #8b5cf6, #ec4899);">♪</div>
+        </div>
+        <div class="now-playing-text">
+          <div class="now-playing-title" id="nowPlayingTitle">No reproduciendo</div>
+          <div class="now-playing-artist" id="nowPlayingArtist">Selecciona una canción</div>
+        </div>
+      </div>
+
+      <div class="playback-controls">
+        <div class="control-buttons">
+          <button class="control-btn" id="shuffleBtn" onclick="toggleShuffle()" title="Aleatorio">⇄</button>
+          <button class="control-btn" onclick="prevTrack()" title="Anterior">⏮</button>
+          <button class="play-btn" id="playPauseBtn" onclick="togglePlayPause()">▶</button>
+          <button class="control-btn" onclick="nextTrack()" title="Siguiente">⏭</button>
+          <button class="control-btn" id="repeatBtn" onclick="toggleRepeat()" title="Repetir">↻</button>
+          <button class="control-btn" id="fullscreenBtn" onclick="toggleFullscreen()" title="Pantalla completa" style="display:none">⛶</button>
+        </div>
+        <div class="progress-container" id="progressSection">
+          <span class="time-label" id="currentTime">0:00</span>
+          <div class="progress-bar" id="progressBar" onclick="seekTo(event)">
+            <div class="progress-fill" id="progressFill"></div>
+          </div>
+          <span class="time-label" id="duration">0:00</span>
+        </div>
+      </div>
+
+      <div class="volume-controls">
+        <button class="control-btn" id="queueBtn" onclick="toggleQueue()" title="Cola de reproducción">☰</button>
+        <span class="volume-icon" onclick="toggleMute()">🔊</span>
+        <div class="volume-bar" id="volumeBar" onclick="setVolume(event)">
+          <div class="volume-fill" id="volumeFill"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Video Player Container -->
+    <div class="video-container" id="playerContainer" style="display:none"></div>
+
+    <!-- Restore Bar -->
+    <div class="restore-bar" id="restoreBar" style="display:none">
+      <div class="restore-info">
+        <span class="restore-label">Reanudando en <span id="restoreCountdown">2</span>s</span>
+        <span class="restore-track" id="restoreTrackName"></span>
+      </div>
+      <div class="restore-actions">
+        <button class="restore-btn resume" onclick="resumePlayback()">▶ Reanudar ahora</button>
+        <button class="restore-btn dismiss" onclick="dismissRestore()">✕</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create Playlist Modal -->
+  <div class="modal-overlay" id="createModal" style="display: none;">
+    <div class="modal modal-wide">
+      <h3>Nueva playlist</h3>
+      <input type="text" id="playlistNameInput" placeholder="Nombre de la playlist" onkeypress="if(event.key==='Enter')createPlaylist()">
+
+      <div class="modal-section-label">Canciones seleccionadas</div>
+      <div class="create-selected-list" id="createSelectedList">
+        <div class="create-selected-empty">No hay canciones seleccionadas</div>
+      </div>
+
+      <button class="modal-add-track-btn" onclick="toggleAddTrackPanel()">➕ Agregar canción o video</button>
+
+      <div class="add-track-panel" id="addTrackPanel">
+        <input type="text" class="add-track-search" id="addTrackSearch" placeholder="Buscar..." oninput="filterAddTrack()">
+        <div class="modal-track-list" id="createPlaylistTracks"></div>
+      </div>
+
+      <div class="modal-buttons">
+        <button class="modal-btn cancel" onclick="hideCreateModal()">Cancelar</button>
+        <button class="modal-btn confirm" onclick="createPlaylist()">Crear (<span id="createPlaylistCount">0</span>)</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Rename Playlist Modal -->
+  <div class="modal-overlay" id="renameModal" style="display: none;">
+    <div class="modal">
+      <h3>Renombrar playlist</h3>
+      <input type="text" id="renameInput" placeholder="Nuevo nombre" onkeypress="if(event.key==='Enter')confirmRename()">
+      <div class="modal-buttons">
+        <button class="modal-btn cancel" onclick="hideRenameModal()">Cancelar</button>
+        <button class="modal-btn confirm" onclick="confirmRename()">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Folder Modal -->
+  <div class="modal-overlay" id="folderModal" style="display: none;">
+    <div class="modal">
+      <h3>Agregar carpeta de música</h3>
+      <input type="text" id="folderPathInput" placeholder="Ruta absoluta a la carpeta de música" onkeypress="if(event.key==='Enter')confirmAddFolder()">
+      <div class="modal-hint">Ej: /home/usuario/Music o /mnt/disco/musica</div>
+      <div class="modal-buttons">
+        <button class="modal-btn cancel" onclick="hideFolderModal()">Cancelar</button>
+        <button class="modal-btn confirm" onclick="confirmAddFolder()">Agregar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Properties Modal -->
+  <div class="modal-overlay" id="propertiesModal" style="display: none;">
+    <div class="modal">
+      <h3>Propiedades</h3>
+      <div class="properties-table" id="propertiesContent"></div>
+      <div class="modal-buttons">
+        <button class="modal-btn confirm" onclick="hidePropertiesModal()">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Visible to Playlist Modal -->
+  <div class="modal-overlay" id="addVisibleModal" style="display: none;">
+    <div class="modal modal-wide">
+      <h3>Agregar a playlist</h3>
+
+      <select class="add-visible-select" id="addVisiblePlaylistSelect" onchange="onAddVisiblePlaylistChange()">
+        <option value="">-- Crear nueva playlist --</option>
+      </select>
+      <div class="add-visible-new-name" id="addVisibleNewName" style="display:none">
+        <input type="text" id="addVisibleNameInput" placeholder="Nombre de la nueva playlist">
+      </div>
+
+      <div class="modal-section-label">Canciones (<span id="addVisibleCount">0</span>)</div>
+      <button class="modal-add-track-btn" onclick="toggleAddVisiblePanel()">🔍 Seleccionar canciones</button>
+      <div class="add-track-panel" id="addVisiblePanel">
+        <input type="text" class="add-track-search" id="addVisibleSearch" placeholder="Buscar..." oninput="filterAddVisible()">
+        <div class="modal-track-list" id="addVisibleTrackList"></div>
+      </div>
+
+      <div class="modal-buttons">
+        <button class="modal-btn cancel" onclick="hideAddVisibleModal()">Cancelar</button>
+        <button class="modal-btn confirm" id="addVisibleConfirmBtn" onclick="confirmAddVisible()">Agregar (0)</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Immich Config Modal -->
+  <div class="modal-overlay" id="immichConfigModal" style="display: none;">
+    <div class="modal">
+      <h3>Configurar Immich</h3>
+      <input type="text" id="immichUrlInput" placeholder="URL del servidor Immich" onkeypress="if(event.key==='Enter')confirmImmichConfig()">
+      <div class="modal-hint">Ej: https://immich.tailscale-xxxx.ts.net</div>
+      <input type="password" id="immichKeyInput" placeholder="API Key" onkeypress="if(event.key==='Enter')confirmImmichConfig()">
+      <div class="modal-hint">Generala en Immich → Settings → API Keys</div>
+      <div class="immich-config-status" id="immichConfigStatus"></div>
+      <div class="modal-buttons" id="immichConfigButtons">
+        <button class="modal-btn cancel" onclick="hideImmichConfig()">Cancelar</button>
+        <button class="modal-btn confirm" onclick="confirmImmichConfig()" id="immichConfigSaveBtn">Conectar</button>
+      </div>
+      <div class="modal-buttons immich-config-disconnect" id="immichDisconnectBtn" style="display:none;margin-top:8px">
+        <button class="modal-btn cancel" onclick="disconnectImmich()" style="color:var(--accent-rose)">Desconectar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Immich Albums Browser -->
+  <div class="modal-overlay" id="immichAssetsModal" style="display: none;">
+    <div class="modal modal-wide">
+      <h3 id="immichAssetsTitle">Videos de Immich</h3>
+      <input type="text" class="add-track-search" id="immichAssetSearch" placeholder="Buscar..." oninput="filterImmichAssets()">
+      <div class="modal-track-list" id="immichAssetList"></div>
+      <div class="modal-buttons">
+        <button class="modal-btn cancel" onclick="hideImmichAssetsModal()">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

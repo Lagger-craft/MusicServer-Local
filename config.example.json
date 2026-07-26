@@ -1,0 +1,8 @@
+{
+  "volume": 100,
+  "shuffle": false,
+  "repeat": "none",
+  "music_dirs": [
+    {"key": "main", "path": "/music"}
+  ]
+}

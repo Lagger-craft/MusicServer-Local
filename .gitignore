@@ -1,0 +1,15 @@
+# Runtime data (secrets, local paths, playlists)
+config.json
+playlists.json
+
+# Virtual environment
+.venv/
+__pycache__/
+*.pyc
+
+# User media
+music/
+
+# OS
+.DS_Store
+Thumbs.db

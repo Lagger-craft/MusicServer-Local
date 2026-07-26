@@ -1,0 +1,11 @@
+services:
+  music-server:
+    build: .
+    container_name: music-server
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./music:/music:ro
+      - ./config.json:/app/config.json
+      - ./playlists.json:/app/playlists.json
+    restart: unless-stopped
