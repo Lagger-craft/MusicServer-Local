@@ -455,6 +455,8 @@ def invidious_auth_post(path, data=None):
         if resp.status_code == 401:
             return None, "Sesión expirada"
         resp.raise_for_status()
+        if resp.status_code == 204 or not resp.content:
+            return {"status": "ok"}, None
         return resp.json(), None
     except Exception as e:
         return None, str(e)

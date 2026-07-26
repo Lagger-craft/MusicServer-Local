@@ -451,7 +451,7 @@ async function showYouTubeSearch() {
 
   const trackList = document.getElementById('trackList');
   const authArea = invidiousLoggedIn
-    ? `<span style="color:var(--text-tertiary);font-size:12px">${escapeHtml(invidiousUsername)}</span>
+    ? `<span class="yt-user-badge">👤 ${escapeHtml(invidiousUsername)}</span>
        <button class="add-all-btn" onclick="loadYouTubeSubscriptions()" style="padding:8px 14px">📺 Subscripciones</button>
        <button class="add-all-btn" onclick="doInvidiousLogout()" style="padding:8px 14px">Cerrar sesión</button>`
     : `<button class="add-all-btn" onclick="showInvidiousLogin()" style="padding:8px 14px">🔑 Iniciar sesión</button>`;
@@ -625,10 +625,12 @@ async function subscribeToChannel(ucid, channelName) {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ucid }),
     });
-    const data = await res.json();
-    if (data.error) { alert(data.error); return; }
-    alert(`Subscrito a ${channelName || 'canal'}`);
-  } catch (_) { alert('Error al subscribir'); }
+    if (res.status === 401) { invidiousLoggedIn = false; renderImmichSidebar(); showInvidiousLogin(); return; }
+    const text = await res.text();
+    let data;
+    try { data = JSON.parse(text); } catch (_) { data = {}; }
+    if (data.error) { return; }
+  } catch (_) {}
 }
 
 /* YouTube Playback (iframe) */
@@ -684,7 +686,7 @@ function showYouTubeContextMenu(event, encodedId, title) {
   html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); addYouTubeToQueue('${encodedId}','${escapeHtml(title).replace(/'/g, "\\'")}')">⬇ Agregar a la cola</div>`;
   html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); showYouTubeAddMenu(event,'${encodedId}','${escapeHtml(title).replace(/'/g, "\\'")}')">+ Añadir a playlist</div>`;
   html += `<div class="context-menu-divider"></div>`;
-  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); alert('Video ID: ${encodedId}\\nTítulo: ${escapeHtml(title)}')">ℹ Propiedades</div>`;
+  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); showYouTubeProperties('${encodedId}','${escapeHtml(title).replace(/'/g, "\\'")}')">ℹ Propiedades</div>`;
   menu.innerHTML = html;
   document.body.appendChild(menu);
   activeContextMenu = menu;
@@ -692,6 +694,20 @@ function showYouTubeContextMenu(event, encodedId, title) {
     document.addEventListener('click', hideTrackContextMenu, { once: true });
     document.addEventListener('contextmenu', hideTrackContextMenu, { once: true });
   }, 10);
+}
+
+function showYouTubeProperties(encodedId, title) {
+  const videoId = decodeURIComponent(encodedId);
+  const rows = [
+    { label: 'Título', value: title },
+    { label: 'Video ID', value: videoId },
+    { label: 'Tipo', value: 'YouTube' },
+    { label: 'URL', value: `https://youtube.com/watch?v=${videoId}` },
+  ];
+  document.getElementById('propertiesContent').innerHTML = rows.map(r =>
+    `<div class="properties-row"><span class="properties-label">${escapeHtml(r.label)}</span><span class="properties-value">${escapeHtml(r.value)}</span></div>`
+  ).join('');
+  document.getElementById('propertiesModal').style.display = 'flex';
 }
 
 /* YouTube Add to Playlist */
