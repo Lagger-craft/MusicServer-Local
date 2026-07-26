@@ -51,7 +51,7 @@ services:
         invidious_companion:
           - private_url: "http://companion:8282/companion"
         invidious_companion_key: "nHDoMbdZekWabBaw"
-        domain: ""
+        domain: "localhost"
         external_port: 3000
         https_only: false
         statistics_enabled: false
