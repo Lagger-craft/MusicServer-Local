@@ -8,6 +8,8 @@
 docker compose up -d
 ```
 
+Incluye servidor de música (puerto 5000) + Invidious (puerto 3000) + PostgreSQL.
+
 ### Manual
 
 ```bash
@@ -20,10 +22,16 @@ python app.py
 
 ## Run
 
-### Docker
+### Docker (todo incluido)
 
 ```bash
 docker compose up -d
+```
+
+### Solo el servidor de música (sin Invidious)
+
+```bash
+docker compose up music-server -d
 ```
 
 ### Manual
