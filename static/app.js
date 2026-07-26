@@ -19,6 +19,10 @@ let activeSubmenu = null;
 let musicDirs = [];
 let isVideo = false;
 
+/* ==================== YOUTUBE STATE ==================== */
+let youtubeResults = [];
+let youtubePlaying = null; // {videoId, title} when iframe is open
+
 /* ==================== IMMICH STATE ==================== */
 let immichConfig = { url: '', connected: false };
 let immichAlbums = [];
@@ -128,11 +132,16 @@ function renderImmichSidebar() {
   const container = document.getElementById('immichSidebar');
   const active = immichView ? ' active' : '';
   const dot = immichConfig.connected ? '🟢' : '🔴';
-  container.innerHTML = `<div class="folder-item${active}" onclick="toggleImmichBrowser()">
+  let html = `<div class="folder-item${active}" onclick="toggleImmichBrowser()">
     <div class="folder-icon" style="background:var(--gradient-accent);color:white;">📷</div>
     <div class="folder-info"><div class="folder-name">Immich</div></div>
     <span class="immich-status-dot" title="${immichConfig.connected ? 'Conectado' : 'Desconectado'}">${dot}</span>
   </div>`;
+  html += `<div class="folder-item" onclick="showYouTubeSearch()">
+    <div class="folder-icon" style="background:var(--gradient-accent);color:white;">▶</div>
+    <div class="folder-info"><div class="folder-name">YouTube</div></div>
+  </div>`;
+  container.innerHTML = html;
 }
 
 function toggleImmichBrowser() {
@@ -417,6 +426,176 @@ async function disconnectImmich() {
   renderContent();
 }
 
+/* ==================== YOUTUBE ==================== */
+async function showYouTubeSearch() {
+  immichView = null;
+  currentPlaylistId = null;
+  currentFolder = null;
+  renderImmichSidebar();
+  renderFolderList();
+  renderSidebar();
+
+  const title = document.getElementById('contentTitle');
+  title.textContent = '▶ YouTube — Buscar';
+
+  const addBtn = document.getElementById('addToPlaylistBtn');
+  addBtn.style.display = 'none';
+
+  document.getElementById('listView').style.display = '';
+  document.getElementById('gridView').style.display = 'none';
+
+  const trackList = document.getElementById('trackList');
+  trackList.innerHTML = `<div class="youtube-search-bar">
+    <input type="text" id="youtubeQuery" placeholder="Buscar en YouTube..." onkeypress="if(event.key==='Enter')doYouTubeSearch()">
+    <button class="play-all-btn" onclick="doYouTubeSearch()" style="padding:12px 24px">🔍 Buscar</button>
+  </div>
+  <div id="youtubeResults"></div>`;
+  document.getElementById('youtubeQuery').focus();
+}
+
+async function doYouTubeSearch() {
+  const q = document.getElementById('youtubeQuery').value.trim();
+  if (!q) return;
+  const container = document.getElementById('youtubeResults');
+  container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Buscando...</div></div>';
+  try {
+    const res = await fetch(`${API_BASE}/invidious/search?q=${encodeURIComponent(q)}`);
+    if (!res.ok) { container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error al buscar</div></div>'; return; }
+    const data = await res.json();
+    // Filter only video results
+    youtubeResults = data.filter(r => r.type === 'video' || r.videoId);
+    if (youtubeResults.length === 0) {
+      container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">▶</div><div class="empty-state-text">Sin resultados</div></div>';
+      return;
+    }
+    container.innerHTML = youtubeResults.map((v, i) => {
+      const dn = v.title || 'Sin título';
+      const thumb = v.videoThumbnails && v.videoThumbnails.length > 0
+        ? v.videoThumbnails.find(t => t.quality === 'medium') || v.videoThumbnails[0]
+        : null;
+      const thumbUrl = thumb ? thumb.url : '';
+      const author = v.author || 'Desconocido';
+      const duration = v.lengthSeconds ? formatTime(v.lengthSeconds) : '';
+      const encodedId = encodeURIComponent(v.videoId);
+      const art = thumbUrl
+        ? `<img src="${thumbUrl}" alt="" onerror="this.parentElement.innerHTML='<div class=\\'track-art-placeholder\\' style=\\'background:${getTrackColor(i)}\\'>▶</div>'">`
+        : `<div class="track-art-placeholder" style="background:${getTrackColor(i)};">▶</div>`;
+      return `<div class="track-item" style="cursor:pointer" onclick="playYouTubeVideo('${encodedId}','${escapeHtml(dn).replace(/'/g, "\\'")}')" oncontextmenu="event.preventDefault();event.stopPropagation();showYouTubeContextMenu(event,'${encodedId}','${escapeHtml(dn).replace(/'/g, "\\'")}')">
+        <span class="track-number">${i + 1}</span>
+        <div class="track-art">${art}</div>
+        <div class="track-info">
+          <div class="track-title">${escapeHtml(dn)}</div>
+          <div class="track-meta">${escapeHtml(author)}${duration ? ' · ' + duration : ''}</div>
+        </div>
+        <div class="track-actions">
+          <button class="track-action-btn queue" onclick="event.stopPropagation(); addYouTubeToQueue('${encodedId}','${escapeHtml(dn).replace(/'/g, "\\'")}')">⬇ Cola</button>
+          <button class="track-action-btn" onclick="event.stopPropagation(); showYouTubeAddMenu(event,'${encodedId}','${escapeHtml(dn).replace(/'/g, "\\'")}')">+ Añadir</button>
+        </div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error de conexión</div></div>';
+  }
+}
+
+/* YouTube Playback (iframe) */
+function playYouTubeVideo(encodedId, title) {
+  const videoId = decodeURIComponent(encodedId);
+  closeYouTubePlayer();
+  const overlay = document.createElement('div');
+  overlay.className = 'youtube-overlay';
+  overlay.id = 'youtubeOverlay';
+  overlay.onclick = (e) => { if (e.target === overlay) closeYouTubePlayer(); };
+
+  const container = document.createElement('div');
+  container.className = 'youtube-player-container';
+  container.innerHTML = `
+    <div class="youtube-header">
+      <span class="youtube-title">${escapeHtml(title)}</span>
+      <button class="youtube-close-btn" onclick="closeYouTubePlayer()">✕</button>
+    </div>
+    <iframe class="youtube-iframe" src="http://localhost:3000/embed/${videoId}" allowfullscreen></iframe>
+  `;
+  overlay.appendChild(container);
+  document.body.appendChild(overlay);
+  youtubePlaying = { videoId, title };
+}
+
+function closeYouTubePlayer() {
+  const overlay = document.getElementById('youtubeOverlay');
+  if (overlay) overlay.remove();
+  youtubePlaying = null;
+}
+
+function addYouTubeToQueue(encodedId, title) {
+  const videoId = decodeURIComponent(encodedId);
+  const path = `youtube:${videoId}`;
+  if (playQueue.some(q => q.path === path)) return;
+  playQueue.push({ path, track: { type: 'youtube', videoId, name: title, path } });
+  updateQueueBadge();
+  if (isQueueOpen()) renderQueueContent();
+}
+
+/* YouTube Context Menu */
+function showYouTubeContextMenu(event, encodedId, title) {
+  event.preventDefault();
+  event.stopPropagation();
+  hideTrackContextMenu();
+  const menu = document.createElement('div');
+  menu.className = 'context-menu';
+  menu.style.left = Math.min(event.clientX, window.innerWidth - 220) + 'px';
+  menu.style.top = Math.min(event.clientY, window.innerHeight - 180) + 'px';
+  menu.style.position = 'fixed';
+  let html = `<div class="context-menu-title">${escapeHtml(title)}</div>`;
+  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); playYouTubeVideo('${encodedId}','${escapeHtml(title).replace(/'/g, "\\'")}')">▶ Reproducir</div>`;
+  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); addYouTubeToQueue('${encodedId}','${escapeHtml(title).replace(/'/g, "\\'")}')">⬇ Agregar a la cola</div>`;
+  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); showYouTubeAddMenu(event,'${encodedId}','${escapeHtml(title).replace(/'/g, "\\'")}')">+ Añadir a playlist</div>`;
+  html += `<div class="context-menu-divider"></div>`;
+  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); alert('Video ID: ${encodedId}\\nTítulo: ${escapeHtml(title)}')">ℹ Propiedades</div>`;
+  menu.innerHTML = html;
+  document.body.appendChild(menu);
+  activeContextMenu = menu;
+  setTimeout(() => {
+    document.addEventListener('click', hideTrackContextMenu, { once: true });
+    document.addEventListener('contextmenu', hideTrackContextMenu, { once: true });
+  }, 10);
+}
+
+/* YouTube Add to Playlist */
+function showYouTubeAddMenu(event, encodedId, title) {
+  event.preventDefault();
+  hideAddMenu();
+  const menu = document.createElement('div');
+  menu.className = 'submenu show';
+  menu.style.position = 'fixed';
+  menu.style.left = Math.max(10, event.clientX - 200) + 'px';
+  menu.style.top = Math.min(window.innerHeight - 100, event.clientY) + 'px';
+  let html = '<div class="submenu-title">Añadir a playlist</div>';
+  if (playlists.length === 0) {
+    html += '<div class="submenu-item" style="color:var(--text-tertiary)">No hay playlists</div>';
+  } else {
+    playlists.forEach(p => {
+      html += `<div class="submenu-item" onclick="addYouTubeToPlaylist(${p.id},'${encodedId}','${escapeHtml(title).replace(/'/g, "\\'")}'); hideAddMenu();">${escapeHtml(p.name)}</div>`;
+    });
+  }
+  menu.innerHTML = html;
+  document.body.appendChild(menu);
+  activeSubmenu = menu;
+  setTimeout(() => document.addEventListener('click', hideAddMenu, { once: true }), 10);
+}
+
+async function addYouTubeToPlaylist(playlistId, encodedId, title) {
+  const videoId = decodeURIComponent(encodedId);
+  try {
+    await fetch(`${API_BASE}/playlists/${playlistId}/songs`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'youtube', videoId, originalName: title }),
+    });
+    await loadPlaylists();
+    if (currentPlaylistId === playlistId) renderContent();
+  } catch (e) { console.error(e); }
+}
+
 function renderFolderList() {
   const container = document.getElementById('folderList');
   const allActive = !currentFolder ? ' active' : '';
@@ -536,11 +715,14 @@ function renderTrackList() {
 
 function renderTrackActions(sp, track) {
   const isImmich = track.type === 'immich';
+  const isYouTube = track.type === 'youtube';
   const queueBtn = `<button class="track-action-btn queue" onclick="event.stopPropagation(); addToQueue('${sp}')">⬇ Cola</button>`;
   let playlistBtn;
   if (currentPlaylistId) {
     if (isImmich) {
       playlistBtn = `<button class="track-action-btn remove" onclick="event.stopPropagation(); removeImmichFromPlaylist(${currentPlaylistId}, '${track.assetId}')">✕ Quitar</button>`;
+    } else if (isYouTube) {
+      playlistBtn = `<button class="track-action-btn remove" onclick="event.stopPropagation(); removeYouTubeFromPlaylist(${currentPlaylistId}, '${track.videoId}')">✕ Quitar</button>`;
     } else {
       playlistBtn = `<button class="track-action-btn remove" onclick="event.stopPropagation(); removeFromPlaylist(${currentPlaylistId}, '${sp}')">✕ Quitar</button>`;
     }
@@ -615,6 +797,14 @@ function getVisibleTracks() {
         assetId: song.assetId,
         name: song.name || 'Video',
         path: `immich:${song.assetId}`,
+        cover: null,
+      });
+    } else if (song.type === 'youtube') {
+      result.push({
+        type: 'youtube',
+        videoId: song.videoId,
+        name: song.name || 'Video',
+        path: `youtube:${song.videoId}`,
         cover: null,
       });
     }
@@ -924,6 +1114,17 @@ async function removeImmichFromPlaylist(playlistId, assetId) {
     await fetch(`${API_BASE}/playlists/${playlistId}/songs`, {
       method: 'DELETE', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type: 'immich', assetId }),
+    });
+    await loadPlaylists();
+    renderContent();
+  } catch (e) { console.error(e); }
+}
+
+async function removeYouTubeFromPlaylist(playlistId, videoId) {
+  try {
+    await fetch(`${API_BASE}/playlists/${playlistId}/songs`, {
+      method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'youtube', videoId }),
     });
     await loadPlaylists();
     renderContent();
@@ -1350,6 +1551,10 @@ function playTrack(encodedPath, autoQueue) {
 
   if (track.type === 'immich') {
     playTrackDirect(track);
+    return;
+  }
+  if (track.type === 'youtube') {
+    playYouTubeVideo(track.videoId, cleanName(track.name));
     return;
   }
 

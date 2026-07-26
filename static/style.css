@@ -1790,6 +1790,92 @@ body {
   font-size: 20px;
 }
 
+/* YouTube search */
+.youtube-search-bar {
+  display: flex;
+  gap: 12px;
+  padding: 16px 0;
+  align-items: center;
+}
+
+.youtube-search-bar input {
+  flex: 1;
+  padding: 14px 18px;
+  background: var(--bg-input);
+  border: 2px solid var(--border-color);
+  border-radius: 12px;
+  color: var(--text-primary);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.3s;
+}
+
+.youtube-search-bar input:focus {
+  border-color: var(--accent-primary);
+}
+
+/* YouTube player overlay */
+.youtube-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.85);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fade-in 0.2s ease;
+}
+
+.youtube-player-container {
+  width: 90%;
+  max-width: 900px;
+  background: #000;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+}
+
+.youtube-header {
+  display: flex;
+  align-items: center;
+  padding: 12px 20px;
+  background: #111;
+  gap: 12px;
+}
+
+.youtube-title {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.youtube-close-btn {
+  background: none;
+  border: none;
+  color: #999;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: all 0.2s;
+}
+
+.youtube-close-btn:hover {
+  color: #fff;
+  background: rgba(255,255,255,0.1);
+}
+
+.youtube-iframe {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: none;
+  display: block;
+}
+
 /* Restore bar */
 .restore-bar {
   position: fixed;

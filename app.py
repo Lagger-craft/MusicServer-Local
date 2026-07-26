@@ -304,6 +304,54 @@ def proxy_immich(asset_id, endpoint):
         return jsonify({"error": str(e)}), 500
 
 
+# ── Invidious ───────────────────────────────────────────────────
+
+INVIDIOUS_URLS = ["http://invidious:3000", "http://localhost:3000"]
+
+def get_invidious_url():
+    for url in INVIDIOUS_URLS:
+        try:
+            r = requests.get(url + "/api/v1/stats", timeout=3)
+            if r.ok:
+                return url
+        except Exception:
+            continue
+    return None
+
+
+@app.route("/api/invidious/search")
+def invidious_search():
+    q = request.args.get("q", "").strip()
+    if not q:
+        return jsonify({"error": "Query requerida"}), 400
+    base = get_invidious_url()
+    if not base:
+        return jsonify({"error": "Invidious no disponible"}), 503
+    try:
+        resp = requests.get(base + "/api/v1/search", params={"q": q}, timeout=15)
+        return jsonify(resp.json())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/invidious/<path:subpath>")
+def invidious_proxy(subpath):
+    base = get_invidious_url()
+    if not base:
+        return jsonify({"error": "Invidious no disponible"}), 503
+    try:
+        resp = requests.get(base + "/" + subpath, stream=True, timeout=30)
+        out = {}
+        for k, v in resp.headers.items():
+            lk = k.lower()
+            if lk in ("content-type", "content-length", "cache-control"):
+                out[k] = v
+        return Response(resp.iter_content(65536), status=resp.status_code,
+                        headers=out, direct_passthrough=True)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/immich/config", methods=["GET"])
 def get_immich_config_api():
     cfg = get_immich_config()
@@ -368,6 +416,9 @@ def normalize_song(s):
     if isinstance(s, dict) and s.get("type") == "immich":
         return {"type": "immich", "assetId": s["assetId"],
                 "name": s.get("originalName", "Video")}
+    if isinstance(s, dict) and s.get("type") == "youtube":
+        return {"type": "youtube", "videoId": s["videoId"],
+                "name": s.get("originalName", "Video")}
     return s
 
 
@@ -397,6 +448,9 @@ def create_playlist():
         elif isinstance(s, dict):
             if s.get("type") == "immich" and s.get("assetId"):
                 songs.append({"type": "immich", "assetId": s["assetId"],
+                              "originalName": s.get("originalName", "Video")})
+            elif s.get("type") == "youtube" and s.get("videoId"):
+                songs.append({"type": "youtube", "videoId": s["videoId"],
                               "originalName": s.get("originalName", "Video")})
     playlists = get_playlists()
     nid = max([p["id"] for p in playlists], default=0) + 1
@@ -438,6 +492,20 @@ def add_to_playlist(pid):
         if not asset_id:
             return jsonify({"error": "assetId requerido"}), 400
         entry = {"type": "immich", "assetId": asset_id,
+                 "originalName": data.get("originalName", "Video")}
+        playlists = get_playlists()
+        for p in playlists:
+            if p["id"] == pid:
+                p["songs"].append(entry)
+                save_playlists(playlists)
+                return jsonify(normalize_playlist(p))
+        return jsonify({"error": "Playlist no encontrada"}), 404
+    # YouTube entry
+    if data.get("type") == "youtube":
+        video_id = data.get("videoId")
+        if not video_id:
+            return jsonify({"error": "videoId requerido"}), 400
+        entry = {"type": "youtube", "videoId": video_id,
                  "originalName": data.get("originalName", "Video")}
         playlists = get_playlists()
         for p in playlists:
@@ -489,6 +557,12 @@ def remove_song_from_playlist(pid):
                               if not (isinstance(s, dict)
                                       and s.get("type") == "immich"
                                       and s.get("assetId") == aid)]
+            elif data.get("type") == "youtube":
+                vid = data.get("videoId")
+                p["songs"] = [s for s in p["songs"]
+                              if not (isinstance(s, dict)
+                                      and s.get("type") == "youtube"
+                                      and s.get("videoId") == vid)]
             else:
                 path = data.get("path", "")
                 if not is_valid_song_path(path):
