@@ -556,6 +556,7 @@ async function checkInvidiousAuth() {
     const res = await fetch(`${API_BASE}/invidious/status`);
     const data = await res.json();
     invidiousLoggedIn = data.logged_in;
+    invidiousUsername = data.username || '';
     renderImmichSidebar();
   } catch (_) {}
 }

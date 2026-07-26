@@ -408,6 +408,9 @@ def invidious_login():
         if not sid:
             return jsonify({"error": "Credenciales inválidas"}), 401
         save_invidious_sid(sid)
+        cfg = get_config()
+        cfg["invidious_user"] = username
+        update_config(cfg)
         return jsonify({"status": "ok", "username": username})
     except requests.ConnectionError:
         return jsonify({"error": "No se pudo conectar con Invidious"}), 503
@@ -418,6 +421,9 @@ def invidious_login():
 @app.route("/api/invidious/logout", methods=["POST"])
 def invidious_logout():
     save_invidious_sid("")
+    cfg = get_config()
+    cfg["invidious_user"] = ""
+    update_config(cfg)
     return jsonify({"status": "ok"})
 
 
@@ -425,9 +431,12 @@ def invidious_logout():
 def invidious_status():
     base = get_invidious_url()
     sid = get_invidious_sid()
+    cfg = get_config()
+    username = cfg.get("invidious_user", "") if sid else ""
     return jsonify({
         "connected": base is not None,
         "logged_in": bool(sid),
+        "username": username,
     })
 
 
