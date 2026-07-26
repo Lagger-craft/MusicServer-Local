@@ -715,6 +715,15 @@ async function subscribeToChannel(ucid, channelName, btnEl) {
 }
 
 /* YouTube Playback (iframe) */
+let invidiousEmbedHost = null;
+
+function getInvidiousEmbedHost() {
+  if (invidiousEmbedHost) return invidiousEmbedHost;
+  const port = window.location.port === '5000' ? '3000' : '3000';
+  invidiousEmbedHost = `${window.location.protocol}//${window.location.hostname}:${port}`;
+  return invidiousEmbedHost;
+}
+
 function playYouTubeVideo(encodedId, title) {
   const videoId = decodeURIComponent(encodedId);
   closeYouTubePlayer();
@@ -730,7 +739,7 @@ function playYouTubeVideo(encodedId, title) {
       <span class="youtube-title">${escapeHtml(title)}</span>
       <button class="youtube-close-btn" onclick="closeYouTubePlayer()">✕</button>
     </div>
-    <iframe class="youtube-iframe" src="http://localhost:3000/embed/${videoId}" allowfullscreen></iframe>
+    <iframe class="youtube-iframe" src="${getInvidiousEmbedHost()}/embed/${videoId}" allowfullscreen></iframe>
   `;
   overlay.appendChild(container);
   document.body.appendChild(overlay);
