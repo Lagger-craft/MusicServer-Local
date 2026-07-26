@@ -637,7 +637,7 @@ async function loadYouTubeChannels() {
     }
     container.innerHTML = channels.map((c, i) => {
       const encodedUcid = encodeURIComponent(c.authorId);
-      return `<div class="track-item" style="cursor:default">
+      return `<div class="track-item" style="cursor:pointer" onclick="loadChannelVideos('${encodedUcid}','${escapeHtml(c.author).replace(/'/g, "\\'")}')">
         <span class="track-number">${i + 1}</span>
         <div class="track-art">
           <div class="track-art-placeholder" style="background:${getTrackColor(i)}">📺</div>
@@ -647,7 +647,7 @@ async function loadYouTubeChannels() {
           <div class="track-meta">${escapeHtml(c.authorId)}</div>
         </div>
         <div class="track-actions">
-          <button class="track-action-btn remove" onclick="event.stopPropagation(); unsubscribeChannel('${encodedUcid}','${escapeHtml(c.author).replace(/'/g, "\\'")}',this)">✕ Subscripción</button>
+          <button class="track-action-btn remove" onclick="event.stopPropagation(); unsubscribeChannel('${encodedUcid}','${escapeHtml(c.author).replace(/'/g, "\\'")}',this)">✕</button>
         </div>
       </div>`;
     }).join('');

@@ -519,6 +519,21 @@ def invidious_unsubscribe():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/invidious/channel/<ucid>")
+def invidious_channel_videos(ucid):
+    base = get_invidious_url()
+    if not base:
+        return jsonify({"error": "Invidious no disponible"}), 503
+    try:
+        resp = requests.get(base + f"/api/v1/channels/{ucid}/videos",
+                            params={"sort": "newest"}, timeout=15)
+        if not resp.ok:
+            return jsonify({"error": "Error al obtener videos"}), resp.status_code
+        return jsonify(resp.json())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/immich/config", methods=["GET"])
 def get_immich_config_api():
     cfg = get_immich_config()
