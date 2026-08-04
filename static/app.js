@@ -32,7 +32,8 @@ let immichAlbums = [];
 let immichAlbumAssets = [];
 let immichView = null; // null | 'albums' | 'album-<id>'
 let immichAllAssets = [];
-let immichSort = 'default'; // 'default' | 'name' | 'date' | 'name_desc' | 'date_desc'
+let immichSort = 'name'; // 'default' | 'name' | 'date' | 'name_desc' | 'date_desc'
+let nowPlayingImmichId = null;
 
 const trackColors = [
   'linear-gradient(135deg, #8b5cf6, #ec4899)',
@@ -48,10 +49,140 @@ const trackColors = [
 /* ==================== UTILS ==================== */
 function getTrackColor(i) { return trackColors[i % trackColors.length]; }
 
+/* ==================== AUTH ==================== */
+let currentUser = null;
+
+async function checkAuth() {
+  try {
+    const res = await fetch(`${API_BASE}/auth/status`);
+    const data = await res.json();
+    if (data.authenticated) {
+      currentUser = data.user;
+      hideLoginModal();
+      showUserBadge();
+      return true;
+    }
+    if (data.first_run) {
+      showRegisterModal();
+    } else {
+      showLoginModal();
+    }
+    return false;
+  } catch (e) {
+    showLoginModal();
+    return false;
+  }
+}
+
+function showLoginModal() {
+  document.getElementById('loginTitle').textContent = 'Iniciar sesion';
+  document.getElementById('loginBtn').textContent = 'Entrar';
+  document.getElementById('loginUsername').value = '';
+  document.getElementById('loginPassword').value = '';
+  document.getElementById('loginError').textContent = '';
+  document.getElementById('loginModal').style.display = 'flex';
+  document.getElementById('loginUsername').focus();
+}
+
+function showRegisterModal() {
+  document.getElementById('loginTitle').textContent = 'Crear cuenta';
+  document.getElementById('loginBtn').textContent = 'Crear cuenta';
+  document.getElementById('loginUsername').value = '';
+  document.getElementById('loginPassword').value = '';
+  document.getElementById('loginError').textContent = 'Primera vez: create tu usuario administrador';
+  document.getElementById('loginModal').style.display = 'flex';
+  document.getElementById('loginUsername').focus();
+}
+
+function hideLoginModal() {
+  document.getElementById('loginModal').style.display = 'none';
+}
+
+async function doLogin() {
+  const username = document.getElementById('loginUsername').value.trim();
+  const password = document.getElementById('loginPassword').value;
+  const errorEl = document.getElementById('loginError');
+  const btn = document.getElementById('loginBtn');
+  if (!username || !password) {
+    errorEl.textContent = 'Completa todos los campos';
+    return;
+  }
+  const isRegister = btn.textContent.includes('Crear');
+  const endpoint = isRegister ? 'register' : 'login';
+  btn.disabled = true;
+  btn.textContent = isRegister ? 'Creando...' : 'Entrando...';
+  errorEl.textContent = '';
+
+  try {
+    const res = await fetch(`${API_BASE}/auth/${endpoint}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await res.json();
+    if (data.error) {
+      errorEl.textContent = data.error;
+      btn.disabled = false;
+      btn.textContent = isRegister ? 'Crear cuenta' : 'Entrar';
+      return;
+    }
+    currentUser = data.user;
+    hideLoginModal();
+    showUserBadge();
+    initApp();
+  } catch (e) {
+    errorEl.textContent = 'Error de conexion';
+    btn.disabled = false;
+    btn.textContent = isRegister ? 'Crear cuenta' : 'Entrar';
+  }
+}
+
+async function doLogout() {
+  await fetch(`${API_BASE}/auth/logout`, { method: 'POST' });
+  currentUser = null;
+  const badge = document.getElementById('authBadge');
+  if (badge) badge.remove();
+  showLoginModal();
+}
+
+function showUserBadge() {
+  let badge = document.getElementById('authBadge');
+  if (!badge) {
+    badge = document.createElement('div');
+    badge.id = 'authBadge';
+    badge.className = 'auth-user-badge';
+    document.querySelector('.topbar-controls').appendChild(badge);
+  }
+  badge.innerHTML = `<span class="auth-username">${escapeHtml(currentUser)}</span><button class="auth-logout-btn" onclick="doLogout()">Salir</button>`;
+}
+
+/* Intercept fetch to handle 401 */
+const _originalFetch = window.fetch;
+window.fetch = async function(...args) {
+  const res = await _originalFetch.apply(this, args);
+  if (res.status === 401 && currentUser) {
+    currentUser = null;
+    showLoginModal();
+  }
+  return res;
+};
+
+function initApp() {
+  loadFiles();
+  loadPlaylists();
+  loadFolders();
+  loadImmichConfig();
+  checkInvidiousAuth();
+}
+
 function escapeHtml(t) {
-  const d = document.createElement('div');
-  d.textContent = t;
-  return d.innerHTML;
+  if (t == null) return '';
+  return String(t)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function formatTime(s) {
@@ -183,7 +314,8 @@ async function loadImmichAlbums() {
   } catch (e) { console.error(e); }
 }
 
-async function loadImmichAlbum(albumId) {
+async function loadImmichAlbum(encodedId) {
+  const albumId = decodeURIComponent(encodedId);
   try {
     const res = await fetch(`${API_BASE}/immich/albums/${albumId}`);
     if (!res.ok) { const e = await res.json(); alert(e.error); return; }
@@ -194,41 +326,85 @@ async function loadImmichAlbum(albumId) {
   } catch (e) { console.error(e); }
 }
 
+function setImmichActions(html) {
+  const existing = document.getElementById('immichActions');
+  if (existing) existing.remove();
+  const addBtn = document.getElementById('addToPlaylistBtn');
+  if (addBtn) addBtn.style.display = 'none';
+  const container = document.createElement('div');
+  container.id = 'immichActions';
+  container.style.display = 'flex';
+  container.style.alignItems = 'center';
+  container.style.gap = '12px';
+  container.innerHTML = html;
+  document.querySelector('.content-actions').appendChild(container);
+}
+
 function renderImmichAlbumsView() {
   const container = document.getElementById('trackList');
   const grid = document.getElementById('gridList');
+  grid.oncontextmenu = null;
   document.getElementById('listView').style.display = 'none';
   document.getElementById('gridView').style.display = '';
-
-  const addBtn = document.getElementById('addToPlaylistBtn');
-  addBtn.style.display = 'none';
 
   renderBackButton(immichView !== 'albums' ? loadImmichAlbums : null);
 
   if (immichView === 'albums') {
     document.getElementById('contentTitle').textContent = '📷 Immich — Álbumes';
+    setImmichActions(`
+      <button class="play-all-btn" onclick="showImmichCreateAlbum()" style="padding:12px 20px">➕ Nuevo álbum</button>
+    `);
+
+    const createCard = `<div class="grid-item" onclick="showImmichCreateAlbum()" style="cursor:pointer;border:2px dashed var(--border-hover);display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:200px">
+      <div style="font-size:48px;color:var(--accent-primary);margin-bottom:12px">+</div>
+      <div class="grid-title" style="color:var(--accent-primary);text-align:center">Nuevo álbum</div>
+      <div class="grid-meta">Crear un álbum nuevo</div>
+    </div>`;
+
     if (immichAlbums.length === 0) {
-      grid.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📷</div><div class="empty-state-text">No hay álbumes</div></div>`;
+      grid.innerHTML = createCard;
       return;
     }
-    grid.innerHTML = immichAlbums.map(a => {
+    grid.innerHTML = createCard + immichAlbums.map(a => {
       const thumb = a.albumThumbnailAssetId
         ? `${API_BASE}/immich/thumbnail/${a.albumThumbnailAssetId}`
         : null;
       const img = thumb
         ? `<img src="${thumb}" alt="" onerror="this.parentElement.innerHTML='<div class=\\'grid-art-placeholder\\' style=\\'background:var(--gradient-accent)\\'>📷</div>'">`
         : `<div class="grid-art-placeholder" style="background:var(--gradient-accent);font-size:40px">📷</div>`;
-      return `<div class="grid-item" onclick="loadImmichAlbum('${a.id}')" style="cursor:pointer">
+      const eid = encodeURIComponent(a.id);
+      const ename = escapeHtml(a.albumName).replace(/'/g, "\\'");
+      return `<div class="grid-item" data-album-id="${eid}" data-album-name="${ename}" data-album-count="${a.assetCount || 0}" onclick="loadImmichAlbum('${eid}')" style="cursor:pointer">
         <div class="grid-art">${img}</div>
         <div class="grid-title">${escapeHtml(a.albumName)}</div>
         <div class="grid-meta">${a.assetCount || 0} archivos</div>
       </div>`;
     }).join('');
+    // Delegate contextmenu for album grid items
+    grid.oncontextmenu = function(e) {
+      const item = e.target.closest('.grid-item[data-album-id]');
+      if (!item) return;
+      e.preventDefault();
+      e.stopPropagation();
+      showAlbumContextMenu(
+        e,
+        item.dataset.albumId,
+        (item.dataset.albumName || '').replace(/&#39;/g, "'"),
+        parseInt(item.dataset.albumCount) || 0
+      );
+    };
   } else {
     const album = immichAlbums.find(a => immichView === `album-${a.id}`);
     document.getElementById('contentTitle').textContent = `📷 ${escapeHtml(album ? album.albumName : '')}`;
+    setImmichActions(`
+      <button class="play-all-btn" onclick="immichUploadToAlbum('${album ? album.id : ''}')" style="padding:12px 20px">📤 Subir video</button>
+      <button class="play-all-btn" onclick="addAllImmichToQueue()" style="padding:12px 20px">⬇ Cola todo</button>
+      <button class="add-all-btn" onclick="loadImmichAlbums()" style="padding:12px 20px">← Volver</button>
+    `);
     if (immichAlbumAssets.length === 0) {
-      grid.innerHTML = `<div class="empty-state"><div class="empty-state-icon">🎬</div><div class="empty-state-text">No hay videos en este álbum</div></div>`;
+      grid.innerHTML = `<div class="empty-state"><div class="empty-state-icon">🎬</div><div class="empty-state-text">No hay videos en este álbum</div>
+        <button class="play-all-btn" onclick="immichUploadToAlbum('${album ? album.id : ''}')" style="margin-top:16px;display:inline-flex">📤 Subir video</button>
+      </div>`;
       return;
     }
     // Sort controls
@@ -344,10 +520,17 @@ function playImmichTrack(encodedId, name) {
     name: name + '.mp4',
     path: `immich:${decodeURIComponent(encodedId)}`,
   };
-  // Set up queue from visible assets
-  const idx = immichAlbumAssets.findIndex(a => a.id === decodeURIComponent(encodedId));
+  // Set up queue from visible assets respecting current sort
+  let sorted = [...immichAlbumAssets];
+  if (immichSort === 'name') sorted.sort((a, b) => naturalCompare(a.originalFileName, b.originalFileName));
+  else if (immichSort === 'name_desc') sorted.sort((a, b) => naturalCompare(b.originalFileName, a.originalFileName));
+  else if (immichSort === 'date') sorted.sort((a, b) => (a.fileCreatedAt || a.createdAt || '').localeCompare(b.fileCreatedAt || b.createdAt || ''));
+  else if (immichSort === 'date_desc') sorted.sort((a, b) => (b.fileCreatedAt || b.createdAt || '').localeCompare(a.fileCreatedAt || b.createdAt || ''));
+  const idx = sorted.findIndex(a => a.id === decodeURIComponent(encodedId));
   if (idx !== -1) {
-    playQueue = immichAlbumAssets.slice(idx + 1).map(a => ({
+    let rest = sorted.filter((_, i) => i !== idx);
+    if (isShuffle) shuffleArray(rest);
+    playQueue = rest.map(a => ({
       path: `immich:${a.id}`,
       track: {
         type: 'immich',
@@ -371,6 +554,48 @@ function addImmichToQueue(encodedId, name) {
   if (isQueueOpen()) renderQueueContent();
 }
 
+function addAllImmichToQueue() {
+  let sorted = [...immichAlbumAssets];
+  if (immichSort === 'name') sorted.sort((a, b) => naturalCompare(a.originalFileName, b.originalFileName));
+  else if (immichSort === 'name_desc') sorted.sort((a, b) => naturalCompare(b.originalFileName, a.originalFileName));
+  else if (immichSort === 'date') sorted.sort((a, b) => (a.fileCreatedAt || a.createdAt || '').localeCompare(b.fileCreatedAt || b.createdAt || ''));
+  else if (immichSort === 'date_desc') sorted.sort((a, b) => (b.fileCreatedAt || b.createdAt || '').localeCompare(a.fileCreatedAt || a.createdAt || ''));
+  let startIdx = 0;
+  if (nowPlayingImmichId) {
+    const playingIdx = sorted.findIndex(a => a.id === nowPlayingImmichId);
+    if (playingIdx !== -1) startIdx = playingIdx + 1;
+  }
+  playQueue = [];
+  for (let i = startIdx; i < sorted.length; i++) {
+    const a = sorted[i];
+    const name = (a.originalFileName || a.id).replace(/\.[^/.]+$/, '');
+    const path = `immich:${a.id}`;
+    playQueue.push({ path, track: { type: 'immich', assetId: a.id, name: name + '.mp4', path } });
+  }
+  updateQueueBadge();
+  if (isQueueOpen()) renderQueueContent();
+  if (playQueue.length > 0) {
+    const orderLabel = immichSort === 'name' ? 'A→Z' : immichSort === 'name_desc' ? 'Z→A' : immichSort === 'date' ? 'más antigua' : immichSort === 'date_desc' ? 'más reciente' : 'por defecto';
+    showToast(`⬇ ${playQueue.length} video(s) en cola (${orderLabel})`);
+  } else {
+    showToast('✅ No hay más videos después del actual');
+  }
+}
+
+function showToast(msg, duration) {
+  duration = duration || 2000;
+  const container = document.getElementById('toastContainer');
+  if (!container) return;
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.textContent = msg;
+  container.appendChild(el);
+  setTimeout(() => {
+    el.classList.add('toast-out');
+    el.addEventListener('animationend', () => el.remove());
+  }, duration);
+}
+
 function showImmichContextMenu(event, encodedId, name) {
   event.preventDefault();
   event.stopPropagation();
@@ -388,6 +613,7 @@ function showImmichContextMenu(event, encodedId, name) {
   html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); addImmichToQueue('${encodedId}', '${escapeHtml(name)}')">⬇ Agregar a la cola</div>`;
   html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); showImmichAddMenu(event, '${encodedId}', '${escapeHtml(name)}')">+ Añadir a playlist</div>`;
   html += `<div class="context-menu-divider"></div>`;
+  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); renameImmichAsset('${encodedId}', '${escapeHtml(name).replace(/'/g, "\\'")}')">✏ Renombrar</div>`;
   html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); showImmichProperties('${encodedId}', '${escapeHtml(name)}')">ℹ Propiedades</div>`;
 
   menu.innerHTML = html;
@@ -398,6 +624,27 @@ function showImmichContextMenu(event, encodedId, name) {
     document.addEventListener('click', hideTrackContextMenu, { once: true });
     document.addEventListener('contextmenu', hideTrackContextMenu, { once: true });
   }, 10);
+}
+
+async function renameImmichAsset(encodedId, currentName) {
+  const assetId = decodeURIComponent(encodedId);
+  const newName = prompt('Nuevo nombre para el video:', currentName);
+  if (!newName || newName.trim() === currentName) return;
+  try {
+    const res = await fetch(`${API_BASE}/immich/assets/${assetId}/rename`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName.trim() })
+    });
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+    if (immichView && immichView.startsWith('album-')) {
+      const albumId = immichView.replace('album-', '');
+      await loadImmichAlbum(encodeURIComponent(albumId));
+    } else {
+      renderImmichAlbumsView();
+    }
+  } catch (e) { console.error(e); alert('Error al renombrar'); }
 }
 
 function showImmichProperties(encodedId, name) {
@@ -418,6 +665,82 @@ function showImmichProperties(encodedId, name) {
     `<div class="properties-row"><span class="properties-label">${escapeHtml(r.label)}</span><span class="properties-value">${escapeHtml(r.value)}</span></div>`
   ).join('');
   document.getElementById('propertiesModal').style.display = 'flex';
+}
+
+/* ==================== ALBUM CONTEXT MENU ==================== */
+
+function showAlbumContextMenu(event, encodedId, name, assetCount) {
+  event.preventDefault();
+  event.stopPropagation();
+  hideTrackContextMenu();
+
+  const albumId = decodeURIComponent(encodedId);
+  const menu = document.createElement('div');
+  menu.className = 'context-menu';
+  menu.style.left = Math.min(event.clientX, window.innerWidth - 220) + 'px';
+  menu.style.top = Math.min(event.clientY, window.innerHeight - 180) + 'px';
+  menu.style.position = 'fixed';
+
+  let html = `<div class="context-menu-title">${escapeHtml(name)}</div>`;
+  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); loadImmichAlbum('${encodedId}')">📂 Abrir álbum</div>`;
+  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); renameImmichAlbum('${encodedId}', '${escapeHtml(name).replace(/'/g, "\\'")}')">✏ Renombrar</div>`;
+  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); showAlbumProperties('${encodedId}', '${escapeHtml(name).replace(/'/g, "\\'")}', ${assetCount})">ℹ Propiedades</div>`;
+  html += `<div class="context-menu-divider"></div>`;
+  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); deleteImmichAlbum('${encodedId}', '${escapeHtml(name).replace(/'/g, "\\'")}')" style="color:var(--accent-rose)">✕ Eliminar álbum</div>`;
+
+  menu.innerHTML = html;
+  document.body.appendChild(menu);
+  activeContextMenu = menu;
+
+  setTimeout(() => {
+    document.addEventListener('click', hideTrackContextMenu, { once: true });
+    document.addEventListener('contextmenu', hideTrackContextMenu, { once: true });
+  }, 10);
+}
+
+function showAlbumProperties(encodedId, name, assetCount) {
+  const albumId = decodeURIComponent(encodedId);
+  const album = immichAlbums.find(a => a.id === albumId);
+  const rows = [
+    { label: 'Nombre', value: name },
+    { label: 'ID', value: albumId },
+    { label: 'Archivos', value: String(assetCount) },
+  ];
+  if (album) {
+    if (album.createdAt) rows.push({ label: 'Creado', value: new Date(album.createdAt).toLocaleDateString() });
+    if (album.updatedAt) rows.push({ label: 'Actualizado', value: new Date(album.updatedAt).toLocaleDateString() });
+  }
+  document.getElementById('propertiesContent').innerHTML = rows.map(r =>
+    `<div class="properties-row"><span class="properties-label">${escapeHtml(r.label)}</span><span class="properties-value">${escapeHtml(r.value)}</span></div>`
+  ).join('');
+  document.getElementById('propertiesModal').style.display = 'flex';
+}
+
+async function deleteImmichAlbum(encodedId, name) {
+  const albumId = decodeURIComponent(encodedId);
+  if (!confirm(`¿Eliminar el álbum "${name}"?`)) return;
+  try {
+    const res = await fetch(`${API_BASE}/immich/albums/${albumId}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+    await loadImmichAlbums();
+  } catch (e) { console.error(e); alert('Error al eliminar el álbum'); }
+}
+
+async function renameImmichAlbum(encodedId, currentName) {
+  const albumId = decodeURIComponent(encodedId);
+  const newName = prompt('Nuevo nombre para el álbum:', currentName);
+  if (!newName || newName.trim() === currentName) return;
+  try {
+    const res = await fetch(`${API_BASE}/immich/albums/${albumId}/rename`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName.trim() })
+    });
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+    await loadImmichAlbums();
+  } catch (e) { console.error(e); alert('Error al renombrar el álbum'); }
 }
 
 /* ==================== IMMICH CONFIG ==================== */
@@ -471,6 +794,116 @@ async function disconnectImmich() {
   renderImmichSidebar();
   if (immichView) { immichView = null; renderContent(); }
   renderContent();
+}
+
+/* ==================== IMMICH CREATE & UPLOAD ==================== */
+
+function showImmichCreateAlbum() {
+  document.getElementById('immichAlbumNameInput').value = '';
+  document.getElementById('immichCreateAlbumStatus').textContent = '';
+  document.getElementById('immichCreateAlbumModal').style.display = 'flex';
+  document.getElementById('immichAlbumNameInput').focus();
+}
+
+function hideImmichCreateAlbum() {
+  document.getElementById('immichCreateAlbumModal').style.display = 'none';
+}
+
+async function confirmImmichCreateAlbum() {
+  const name = document.getElementById('immichAlbumNameInput').value.trim();
+  const status = document.getElementById('immichCreateAlbumStatus');
+  if (!name) { status.textContent = 'Ingresá un nombre'; return; }
+  status.textContent = 'Creando...';
+  try {
+    const res = await fetch(`${API_BASE}/immich/albums`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ albumName: name }),
+    });
+    const data = await res.json();
+    if (data.error) { status.textContent = data.error; return; }
+    hideImmichCreateAlbum();
+    // Navigate into the new album so user can upload immediately
+    await loadImmichAlbum(encodeURIComponent(data.id));
+  } catch (e) { status.textContent = 'Error de conexión'; }
+}
+
+function immichUploadToAlbum(albumId) {
+  // store target album id so onImmichFileSelected uses it
+  window._immichUploadAlbumId = albumId;
+  document.getElementById('immichFileInput').click();
+}
+
+function onImmichFileSelected(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const albumId = window._immichUploadAlbumId || '';
+  window._immichUploadAlbumId = null;
+  startImmichUpload(file, albumId);
+  event.target.value = '';
+}
+
+async function startImmichUpload(file, albumId) {
+  const overlay = document.getElementById('uploadOverlay');
+  const text = document.getElementById('uploadText');
+  const fill = document.getElementById('uploadProgressFill');
+  const compressLabel = document.getElementById('compressLabel');
+  const compressCheck = document.getElementById('compressCheck');
+
+  text.textContent = `Subiendo ${file.name}...`;
+  fill.style.width = '0%';
+  overlay.style.display = 'flex';
+
+  // Show compression option for files >10GB
+  const threshold = 10 * 1024 * 1024 * 1024;
+  const useCompression = file.size > threshold && compressCheck.checked;
+  compressLabel.style.display = file.size > threshold ? 'block' : 'none';
+
+  const endpoint = useCompression ? 'upload-compressed' : 'upload';
+  if (useCompression) {
+    text.textContent = `Comprimiendo y subiendo ${file.name}... (esto puede tardar)`;
+  }
+
+  const form = new FormData();
+  form.append('file', file);
+  if (albumId) form.append('albumId', albumId);
+
+  try {
+    const res = await fetch(`${API_BASE}/immich/${endpoint}`, {
+      method: 'POST', body: form,
+    });
+    let data;
+    try {
+      data = await res.json();
+    } catch (_) {
+      const txt = await res.text();
+      alert(`Error del servidor (${res.status}): ${txt.slice(0, 200)}`);
+      overlay.style.display = 'none';
+      compressLabel.style.display = 'none';
+      return;
+    }
+    if (data.error) { alert(data.error); overlay.style.display = 'none'; compressLabel.style.display = 'none'; return; }
+
+    let msg = data.warning || '✅ Subido correctamente';
+    if (data.reduction) {
+      msg += ` (${data.reduction} reducción)`;
+    }
+    text.textContent = msg;
+    fill.style.width = '100%';
+    setTimeout(() => {
+      overlay.style.display = 'none';
+      compressLabel.style.display = 'none';
+      if (albumId && immichView === `album-${albumId}`) {
+        loadImmichAlbum(albumId);
+      } else {
+        loadImmichAlbums();
+      }
+    }, 1500);
+  } catch (e) {
+    console.error(e);
+    alert('Error de conexión al subir');
+    overlay.style.display = 'none';
+    compressLabel.style.display = 'none';
+  }
 }
 
 /* ==================== YOUTUBE ==================== */
@@ -770,7 +1203,7 @@ function playYouTubeVideo(encodedId, title) {
   const videoId = decodeURIComponent(encodedId);
   closeYouTubePlayer();
 
-  fetch(`${API_BASE}/invidious/api/v1/videos/${videoId}`).then(r => r.json()).then(data => {
+  fetch(`${API_BASE}/invidious/video/${videoId}`).then(r => r.json()).then(data => {
     if (data.liveNow) {
       window.open(`${getInvidiousEmbedHost()}/watch?v=${videoId}`, '_blank');
       return;
@@ -807,6 +1240,7 @@ function showYouTubeIframe(videoId, title) {
 
 function playYouTubeDirect(videoId, streamUrl, title) {
   stopPlayback();
+  nowPlayingImmichId = null;
   isVideo = true;
   const player = document.getElementById('playerContainer');
   const nowPlaying = document.getElementById('nowPlayingSection');
@@ -998,6 +1432,9 @@ function showAllFolders() {
 
 function renderContent() {
   if (immichView) { renderImmichAlbumsView(); return; }
+  // Clean up Immich actions when leaving Immich view
+  const immichActions = document.getElementById('immichActions');
+  if (immichActions) immichActions.remove();
   renderTrackList();
   renderGridView();
   let title = 'Todas las canciones';
@@ -1006,7 +1443,7 @@ function renderContent() {
   document.getElementById('contentTitle').textContent = title;
   const visible = getVisibleTracks();
   const addBtn = document.getElementById('addToPlaylistBtn');
-  addBtn.style.display = visible.length > 0 ? '' : 'none';
+  if (addBtn) addBtn.style.display = visible.length > 0 ? '' : 'none';
 
   // Back button for folder view
   renderBackButton(currentFolder ? () => goHome() : null);
@@ -1841,8 +2278,10 @@ function playTrackDirect(track) {
 
   if (track.type === 'immich') {
     video.src = `${API_BASE}/immich/media/${track.assetId}`;
+    nowPlayingImmichId = track.assetId;
   } else {
     video.src = `/media/${encodedPath}`;
+    nowPlayingImmichId = null;
   }
 
   video.load();
@@ -1921,10 +2360,16 @@ function playTrack(encodedPath, autoQueue) {
     const visible = getVisibleTracks();
     const clickedIdx = visible.findIndex(t => encodeURIComponent(t.path) === encodedPath);
     if (clickedIdx !== -1) {
-      playQueue = visible.slice(clickedIdx + 1).map(t => ({
-        path: encodeURIComponent(t.path),
-        track: t,
-      }));
+      if (isShuffle) {
+        const rest = visible.filter((_, i) => i !== clickedIdx);
+        shuffleArray(rest);
+        playQueue = rest.map(t => ({ path: encodeURIComponent(t.path), track: t }));
+      } else {
+        playQueue = visible.slice(clickedIdx + 1).map(t => ({
+          path: encodeURIComponent(t.path),
+          track: t,
+        }));
+      }
     }
     updateQueueBadge();
     if (isQueueOpen()) renderQueueContent();
@@ -1959,6 +2404,7 @@ function playTrack(encodedPath, autoQueue) {
         </div>
       </div>
     </div>`;
+    nowPlayingImmichId = null;
     video = document.getElementById('videoPlayer');
     video.src = `/media/${encodedPath}`;
     video.load();
@@ -1982,6 +2428,7 @@ function playTrack(encodedPath, autoQueue) {
     video.onwaiting = () => { updatePlayPauseBtn(false); };
     video.onplay = () => { updatePlayPauseBtn(true); };
   } else {
+    nowPlayingImmichId = null;
     player.innerHTML = '';
     player.style.display = 'none';
     nowPlaying.style.display = '';
@@ -2118,8 +2565,8 @@ document.addEventListener('keydown', (e) => {
     togglePlayPause();
     return;
   }
-  // Arrow keys, F, M: only when not typing
-  if (!isInput) {
+  // Arrow keys, F, M: only when not typing and no modifier held
+  if (!isInput && !e.ctrlKey && !e.altKey && !e.metaKey) {
     const el = isVideo ? video : audio;
     if (e.key === 'ArrowLeft' && el) { e.preventDefault(); el.currentTime = Math.max(0, el.currentTime - 5); }
     else if (e.key === 'ArrowRight' && el) { e.preventDefault(); el.currentTime = Math.min(el.duration || 0, el.currentTime + 5); }
@@ -2156,9 +2603,20 @@ function playNextInSequence() {
     }
     return;
   }
+  const list = getVisibleTracks();
+  if (!list.length) return;
+
+  if (isShuffle) {
+    const idx = Math.floor(Math.random() * list.length);
+    const next = list[idx];
+    if (next.type === 'immich') {
+      playTrackDirect(next);
+    } else {
+      playTrack(encodeURIComponent(next.path), true);
+    }
+    return;
+  }
   if (repeatMode === 'all') {
-    const list = getVisibleTracks();
-    if (!list.length) return;
     const curPath = allTracks[currentIndex]?.path;
     const curIdx = list.findIndex(t => t.path === curPath);
     const nextIdx = curIdx < list.length - 1 ? curIdx + 1 : 0;
@@ -2218,6 +2676,18 @@ function playAll() {
 function toggleShuffle() {
   isShuffle = !isShuffle;
   document.getElementById('shuffleBtn').classList.toggle('active', isShuffle);
+  if (isShuffle && playQueue.length > 0) {
+    shuffleArray(playQueue);
+    if (isQueueOpen()) renderQueueContent();
+    updateQueueBadge();
+  }
+}
+
+function shuffleArray(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
 }
 
 function toggleRepeat() {
@@ -2380,8 +2850,7 @@ async function loadImmichConfig() {
 /* ==================== INIT ==================== */
 initTheme();
 document.getElementById('volumeBar').addEventListener('wheel', volumeWheel, { passive: false });
-loadFiles();
-loadPlaylists();
-loadFolders();
-loadImmichConfig();
-checkInvidiousAuth();
+(async () => {
+  const authed = await checkAuth();
+  if (authed) initApp();
+})();

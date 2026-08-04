@@ -236,6 +236,59 @@
     </div>
   </div>
 
+  <!-- Immich Create Album Modal -->
+  <div class="modal-overlay" id="immichCreateAlbumModal" style="display: none;">
+    <div class="modal">
+      <h3>Nuevo álbum en Immich</h3>
+      <input type="text" id="immichAlbumNameInput" placeholder="Nombre del álbum" onkeypress="if(event.key==='Enter')confirmImmichCreateAlbum()">
+      <div class="immich-config-status" id="immichCreateAlbumStatus"></div>
+      <div class="modal-buttons">
+        <button class="modal-btn cancel" onclick="hideImmichCreateAlbum()">Cancelar</button>
+        <button class="modal-btn confirm" onclick="confirmImmichCreateAlbum()">Crear</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hidden file input for Immich upload -->
+  <input type="file" id="immichFileInput" accept="video/*" style="display:none" onchange="onImmichFileSelected(event)">
+
+  <!-- Upload progress indicator -->
+  <div class="upload-overlay" id="uploadOverlay" style="display:none">
+    <div class="upload-modal">
+      <div class="upload-spinner"></div>
+      <div class="upload-text" id="uploadText">Subiendo...</div>
+      <label id="compressLabel" style="display:none; margin: 10px 0; color: var(--text);">
+        <input type="checkbox" id="compressCheck" checked>
+        Comprimir con H.265 (reduce tamaño ~50%)
+      </label>
+      <div class="upload-progress-bar" id="uploadProgressBar">
+        <div class="upload-progress-fill" id="uploadProgressFill"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toastContainer" class="toast-container"></div>
+
+  <!-- Login Modal -->
+  <div class="modal-overlay" id="loginModal" style="display:none">
+    <div class="modal">
+      <div style="text-align:center;margin-bottom:24px">
+        <div style="font-size:48px;margin-bottom:8px">&#9835;</div>
+        <h3 style="margin:0" id="loginTitle">Iniciar sesion</h3>
+      </div>
+      <div id="loginForm">
+        <input type="text" id="loginUsername" placeholder="Usuario" autocomplete="username"
+               onkeypress="if(event.key==='Enter')doLogin()">
+        <input type="password" id="loginPassword" placeholder="Contrasena" autocomplete="current-password"
+               onkeypress="if(event.key==='Enter')doLogin()">
+        <div class="login-error" id="loginError"></div>
+        <div class="modal-buttons">
+          <button class="modal-btn confirm" onclick="doLogin()" id="loginBtn">Entrar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>
