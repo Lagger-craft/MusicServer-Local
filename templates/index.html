@@ -269,6 +269,19 @@
 
   <div id="toastContainer" class="toast-container"></div>
 
+  <!-- Upload Queue Tray -->
+  <div class="queue-tray" id="queueTray" style="display:none">
+    <div class="queue-tray-header">
+      <span class="queue-tray-title">Cola de subida</span>
+      <span class="queue-tray-count" id="queueTrayCount">0</span>
+      <button class="queue-tray-close" onclick="toggleQueueTray()" title="Cerrar">✕</button>
+    </div>
+    <div class="queue-tray-list" id="queueTrayList"></div>
+  </div>
+  <button class="queue-tray-toggle" id="queueTrayToggle" onclick="toggleQueueTray()" style="display:none">
+    ⬆ <span class="queue-tray-badge" id="queueTrayBadge">0</span>
+  </button>
+
   <!-- Login Modal -->
   <div class="modal-overlay" id="loginModal" style="display:none">
     <div class="modal">

@@ -796,6 +796,111 @@ async function disconnectImmich() {
   renderContent();
 }
 
+/* ==================== IMMICH UPLOAD QUEUE TRAY ==================== */
+let queueTrayPollingInterval = null;
+
+function toggleQueueTray() {
+  const tray = document.getElementById('queueTray');
+  const visible = tray.style.display !== 'none';
+  if (visible) {
+    tray.style.display = 'none';
+    if (queueTrayPollingInterval) {
+      clearInterval(queueTrayPollingInterval);
+      queueTrayPollingInterval = null;
+    }
+  } else {
+    tray.style.display = '';
+    pollQueue();
+    if (!queueTrayPollingInterval) {
+      queueTrayPollingInterval = setInterval(pollQueue, 3000);
+    }
+  }
+}
+
+async function pollQueue() {
+  try {
+    const res = await fetch(`${API_BASE}/immich/queue`);
+    const jobs = await res.json();
+    renderQueueTray(jobs);
+    const activeJobs = jobs.filter(j => j.status === 'pending' || j.status === 'compressing' || j.status === 'uploading');
+    const toggle = document.getElementById('queueTrayToggle');
+    if (jobs.length > 0) {
+      toggle.style.display = '';
+      document.getElementById('queueTrayBadge').textContent = activeJobs.length || jobs.length;
+      document.getElementById('queueTrayCount').textContent = jobs.length;
+    } else {
+      toggle.style.display = 'none';
+      document.getElementById('queueTray').style.display = 'none';
+      if (queueTrayPollingInterval) {
+        clearInterval(queueTrayPollingInterval);
+        queueTrayPollingInterval = null;
+      }
+    }
+  } catch (e) {
+    console.error('Error polling queue:', e);
+  }
+}
+
+function renderQueueTray(jobs) {
+  const list = document.getElementById('queueTrayList');
+  if (jobs.length === 0) {
+    list.innerHTML = '<div class="queue-tray-empty">No hay archivos en la cola</div>';
+    return;
+  }
+  const statusIcons = {
+    pending: '⏳',
+    compressing: '📦',
+    uploading: '⬆',
+    done: '✅',
+    error: '❌',
+    cancelled: '⏹',
+  };
+  const statusLabels = {
+    pending: 'En cola',
+    compressing: 'Comprimiendo',
+    uploading: 'Subiendo',
+    done: 'Completado',
+    error: 'Error',
+    cancelled: 'Cancelado',
+  };
+  list.innerHTML = jobs.map(j => {
+    const icon = statusIcons[j.status] || '⏳';
+    const label = statusLabels[j.status] || j.status;
+    const cancelable = j.status === 'pending' || j.status === 'compressing';
+    const sizeInfo = j.originalSize ? ` (${formatBytes(j.originalSize)})` : '';
+    const errorInfo = j.error ? `<div class="queue-tray-item-status" style="color:var(--accent-rose);font-size:11px">${escapeHtml(j.error)}</div>` : '';
+    return `<div class="queue-tray-item">
+      <div class="queue-tray-status ${j.status}">${icon}</div>
+      <div class="queue-tray-item-info">
+        <div class="queue-tray-item-name">${escapeHtml(j.filename)}${sizeInfo}</div>
+        <div class="queue-tray-item-status">${label}</div>
+        ${errorInfo}
+      </div>
+      ${cancelable ? `<button class="queue-tray-item-cancel" onclick="cancelQueueJob('${j.id}')" title="Cancelar">✕</button>` : ''}
+    </div>`;
+  }).join('');
+}
+
+async function cancelQueueJob(id) {
+  try {
+    const res = await fetch(`${API_BASE}/immich/queue/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.error) { console.error(data.error); return; }
+    pollQueue();
+  } catch (e) {
+    console.error('Error cancelling job:', e);
+  }
+}
+
+function formatBytes(bytes) {
+  if (!bytes || isNaN(bytes)) return '—';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  let s = bytes;
+  while (s >= 1024 && i < units.length - 1) { s /= 1024; i++; }
+  return s.toFixed(1) + ' ' + units[i];
+}
+
 /* ==================== IMMICH CREATE & UPLOAD ==================== */
 
 function showImmichCreateAlbum() {
@@ -843,66 +948,31 @@ function onImmichFileSelected(event) {
 }
 
 async function startImmichUpload(file, albumId) {
-  const overlay = document.getElementById('uploadOverlay');
-  const text = document.getElementById('uploadText');
-  const fill = document.getElementById('uploadProgressFill');
-  const compressLabel = document.getElementById('compressLabel');
   const compressCheck = document.getElementById('compressCheck');
-
-  text.textContent = `Subiendo ${file.name}...`;
-  fill.style.width = '0%';
-  overlay.style.display = 'flex';
-
-  // Show compression option for files >10GB
   const threshold = 10 * 1024 * 1024 * 1024;
   const useCompression = file.size > threshold && compressCheck.checked;
-  compressLabel.style.display = file.size > threshold ? 'block' : 'none';
-
-  const endpoint = useCompression ? 'upload-compressed' : 'upload';
-  if (useCompression) {
-    text.textContent = `Comprimiendo y subiendo ${file.name}... (esto puede tardar)`;
-  }
 
   const form = new FormData();
   form.append('file', file);
   if (albumId) form.append('albumId', albumId);
+  if (useCompression) form.append('compress', 'true');
 
   try {
-    const res = await fetch(`${API_BASE}/immich/${endpoint}`, {
+    const res = await fetch(`${API_BASE}/immich/queue`, {
       method: 'POST', body: form,
     });
-    let data;
-    try {
-      data = await res.json();
-    } catch (_) {
-      const txt = await res.text();
-      alert(`Error del servidor (${res.status}): ${txt.slice(0, 200)}`);
-      overlay.style.display = 'none';
-      compressLabel.style.display = 'none';
-      return;
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+    showToast(`⬆ ${file.name} agregado a la cola`);
+    const toggle = document.getElementById('queueTrayToggle');
+    toggle.style.display = '';
+    pollQueue();
+    if (!queueTrayPollingInterval) {
+      queueTrayPollingInterval = setInterval(pollQueue, 3000);
     }
-    if (data.error) { alert(data.error); overlay.style.display = 'none'; compressLabel.style.display = 'none'; return; }
-
-    let msg = data.warning || '✅ Subido correctamente';
-    if (data.reduction) {
-      msg += ` (${data.reduction} reducción)`;
-    }
-    text.textContent = msg;
-    fill.style.width = '100%';
-    setTimeout(() => {
-      overlay.style.display = 'none';
-      compressLabel.style.display = 'none';
-      if (albumId && immichView === `album-${albumId}`) {
-        loadImmichAlbum(albumId);
-      } else {
-        loadImmichAlbums();
-      }
-    }, 1500);
   } catch (e) {
     console.error(e);
     alert('Error de conexión al subir');
-    overlay.style.display = 'none';
-    compressLabel.style.display = 'none';
   }
 }
 

@@ -1,130 +1,258 @@
-import concurrent.futures
-import json
+import io
+import logging
 import os
-import time
+import secrets
+from logging.handlers import RotatingFileHandler
 
 import requests
+from flask import Flask, jsonify, render_template, request, Response, send_from_directory, session
 
-from flask import Flask, jsonify, render_template, request, Response, send_from_directory
+from auth import (
+    create_user,
+    verify_user,
+    login_required,
+    is_first_run,
+    delete_user,
+    change_password,
+)
+
+from config import (
+    DEFAULT_DIR,
+    get_config,
+    get_music_dirs,
+    migrate_immich_key,
+    update_config,
+)
+from files import (
+    AUDIO_EXTENSIONS,
+    IGNORED_FOLDERS,
+    VIDEO_EXTENSIONS,
+    is_safe_path,
+    is_valid_song_path,
+    list_files,
+    resolve_path,
+    serve_file_with_range,
+    start_watcher,
+)
+from immich import (
+    handle_get_config as immich_handle_get_config,
+    handle_set_config as immich_handle_set_config,
+    handle_upload as immich_handle_upload,
+    handle_upload_compressed as immich_handle_upload_compressed,
+    immich_api,
+    immich_api_request,
+    proxy_immich,
+)
+from upload_queue import upload_queue
+from invidious import (
+    get_feed,
+    get_invidious_sid,
+    get_invidious_url,
+    invidious_auth_get,
+    invidious_auth_headers,
+    invidious_auth_post,
+    save_invidious_sid,
+)
+from playlists import (
+    get_playlists,
+    normalize_playlist,
+    normalize_playlists,
+    save_playlists,
+)
+
+# ── Logging setup ───────────────────────────────────────────
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+handler = RotatingFileHandler("server.log", maxBytes=10 * 1024 * 1024, backupCount=5)
+handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+logging.getLogger().addHandler(handler)
+
+# ── Flask app ───────────────────────────────────────────────
 
 app = Flask(__name__, static_folder="static")
+app.config["MAX_CONTENT_LENGTH"] = 15 * 1024 * 1024 * 1024  # 15GB
 
-CONFIG_FILE = "config.json"
-PLAYLISTS_FILE = "playlists.json"
+# ── Secret key (persistent) ────────────────────────────────
+SECRET_KEY_FILE = ".secret.key"
 
-AUDIO_EXTENSIONS = {".mp3", ".flac", ".wav", ".ogg", ".m4a", ".wma", ".opus"}
-VIDEO_EXTENSIONS = {".mp4", ".webm", ".mkv", ".avi", ".mov", ".flv"}
-ALL_EXTENSIONS = AUDIO_EXTENSIONS | VIDEO_EXTENSIONS
-IGNORED_FOLDERS = {".stfolder", ".stversions", "@eaDir", "thumbnails", ".thumbnails", "covers", ".cache"}
+def _get_or_create_secret_key():
+    env_key = os.environ.get("FLASK_SECRET_KEY")
+    if env_key:
+        return env_key
+    if os.path.exists(SECRET_KEY_FILE):
+        with open(SECRET_KEY_FILE, "r") as f:
+            key = f.read().strip()
+        if key:
+            return key
+    # Generate new key and persist it
+    key = secrets.token_hex(32)
+    with open(SECRET_KEY_FILE, "w") as f:
+        f.write(key)
+    os.chmod(SECRET_KEY_FILE, 0o600)
+    logger.info("Generated new secret key")
+    return key
 
-_list_cache = {"data": None, "updated": 0, "ttl": 10}
-
-def get_list_cache():
-    return _list_cache
-
-def set_list_cache(data):
-    c = get_list_cache()
-    c["data"] = data
-    c["updated"] = time.time()
-
-
-DEFAULT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "music")
-
-
-def get_config():
-    cfg = {"volume": 100, "shuffle": False, "repeat": "none"}
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE) as f:
-            stored = json.load(f)
-            cfg.update(stored)
-    # Backward compat: migrate single music_dir to music_dirs
-    if "music_dirs" not in cfg or not isinstance(cfg["music_dirs"], list):
-        old = cfg.get("music_dir", "")
-        if old and os.path.isdir(old):
-            cfg["music_dirs"] = [{"key": "main", "path": os.path.abspath(old)}]
-        else:
-            cfg["music_dirs"] = [{"key": "main", "path": DEFAULT_DIR}]
-    return cfg
+app.secret_key = _get_or_create_secret_key()
+upload_queue.start()
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    PERMANENT_SESSION_LIFETIME=86400 * 30,
+)
 
 
-def get_music_dirs():
-    cfg = get_config()
-    dirs = []
-    for d in cfg.get("music_dirs", []):
-        p = d.get("path", "")
-        if p and os.path.isdir(p):
-            dirs.append({"key": d.get("key", "main"), "path": os.path.abspath(p)})
-    if not dirs:
-        dirs = [{"key": "main", "path": DEFAULT_DIR}]
-    return dirs
+# ── Rate limiting (SQLite-backed) ──────────────────────────
+
+from ratelimit import limit
+
+logger.info("Rate limiting enabled (SQLite storage)")
 
 
-def resolve_path(path):
-    """Return (dir_info, relative_path) for a given file path.
-    If path starts with {key}/, look up that dir. Otherwise use first dir."""
-    dirs = get_music_dirs()
-    if "/" in path:
-        maybe_key, rest = path.split("/", 1)
-        for d in dirs:
-            if d["key"] == maybe_key:
-                return d, rest
-    return dirs[0], path
+# ── Security headers ───────────────────────────────────────
+
+@app.after_request
+def set_security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
 
 
-def get_file_type(filename):
-    _, ext = os.path.splitext(filename.lower())
-    if ext in VIDEO_EXTENSIONS:
-        return "video"
-    return "audio"
+# ── Auth routes ─────────────────────────────────────────────
+
+@app.route("/api/auth/status")
+def auth_status():
+    if "user" in session:
+        return jsonify({"authenticated": True, "user": session["user"]})
+    return jsonify({"authenticated": False, "first_run": is_first_run()})
 
 
-def list_files():
-    c = get_list_cache()
-    if c["data"] is not None and time.time() - c["updated"] < c["ttl"]:
-        return c["data"]
+@app.route("/api/auth/register", methods=["POST"])
+@limit(5, 60)
+def auth_register():
+    if not is_first_run():
+        return jsonify({"error": "Registro no disponible"}), 403
+    data = request.json
+    username = (data or {}).get("username", "").strip()
+    password = (data or {}).get("password", "")
+    if not username or not password:
+        return jsonify({"error": "Usuario y contrasena requeridos"}), 400
+    if len(password) < 6:
+        return jsonify({"error": "La contrasena debe tener al menos 6 caracteres"}), 400
+    ok, err = create_user(username, password)
+    if not ok:
+        return jsonify({"error": err}), 400
+    session["user"] = username
+    session.permanent = True
+    return jsonify({"status": "ok", "user": username})
 
-    files = []
-    for d in get_music_dirs():
-        base = d["path"]
-        key = d["key"]
-        if not os.path.isdir(base):
-            continue
-        for root, _, filenames in os.walk(base):
-            for filename in filenames:
-                if any(filename.lower().endswith(ext) for ext in ALL_EXTENSIONS):
-                    rel_path = os.path.relpath(os.path.join(root, filename), base)
-                    full_path = os.path.join(key, rel_path)
-                    cover_name = os.path.splitext(filename)[0] + ".png"
-                    cover_path = os.path.join(root, cover_name)
-                    files.append({
-                        "name": filename,
-                        "path": full_path,
-                        "cover": os.path.join(key, cover_name) if os.path.exists(cover_path) else None,
-                        "type": get_file_type(filename),
-                    })
 
-    files.sort(key=lambda x: x["name"].lower())
-    set_list_cache(files)
-    return files
+@app.route("/api/auth/login", methods=["POST"])
+@limit(10, 60)
+def auth_login():
+    data = request.json
+    username = (data or {}).get("username", "").strip()
+    password = (data or {}).get("password", "")
+    if not username or not password:
+        return jsonify({"error": "Usuario y contrasena requeridos"}), 400
+    if verify_user(username, password):
+        session["user"] = username
+        session.permanent = True
+        logger.info("User logged in: %s", username)
+        return jsonify({"status": "ok", "user": username})
+    logger.warning("Failed login attempt for: %s", username)
+    return jsonify({"error": "Credenciales invalidas"}), 401
 
+
+@app.route("/api/auth/logout", methods=["POST"])
+def auth_logout():
+    user = session.pop("user", None)
+    if user:
+        logger.info("User logged out: %s", user)
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/auth/change-password", methods=["POST"])
+@login_required
+@limit(5, 60)
+def auth_change_password():
+    data = request.json
+    old_pw = (data or {}).get("old_password", "")
+    new_pw = (data or {}).get("new_password", "")
+    if not old_pw or not new_pw:
+        return jsonify({"error": "Contrasena actual y nueva requeridas"}), 400
+    if len(new_pw) < 6:
+        return jsonify({"error": "La nueva contrasena debe tener al menos 6 caracteres"}), 400
+    ok, err = change_password(session["user"], old_pw, new_pw)
+    if not ok:
+        return jsonify({"error": err}), 400
+    return jsonify({"status": "ok"})
+
+
+# ── File watcher ────────────────────────────────────────────
+
+start_watcher()
+
+# ── Migrations ──────────────────────────────────────────────
+
+migrate_immich_key()
+
+logger.info("Starting music server")
+
+
+# ══════════════════════════════════════════════════════════════
+# ROUTES
+# ══════════════════════════════════════════════════════════════
 
 @app.route("/")
 def index():
     return render_template("index.html")
 
 
+@app.route("/api/health")
+def health():
+    return jsonify({"status": "ok"})
+
+
+# ── Media serving ───────────────────────────────────────────
+
 @app.route("/media/<path:filename>")
+@login_required
 def serve_media(filename):
     d, rel = resolve_path(filename)
     if not is_safe_path(d["path"], rel):
+        logger.warning("Blocked path traversal attempt: %s", filename)
         return jsonify({"error": "Acceso denegado: ruta inválida"}), 403
     _, ext = os.path.splitext(rel.lower())
-    if ext not in ALL_EXTENSIONS:
+    if ext not in (AUDIO_EXTENSIONS | VIDEO_EXTENSIONS):
         return jsonify({"error": "Tipo de archivo no permitido"}), 403
+    full_path = os.path.join(d["path"], rel)
+    if not os.path.isfile(full_path):
+        return jsonify({"error": "Archivo no encontrado"}), 404
+    logger.debug("Serving media: %s/%s", d["key"], rel)
+    return serve_file_with_range(full_path, rel)
+
+
+# ── Cover art ────────────────────────────────────────────────
+
+@app.route("/api/cover/<path:filename>")
+@login_required
+def serve_cover(filename):
+    d, rel = resolve_path(filename)
+    if not is_safe_path(d["path"], rel):
+        return jsonify({"error": "Acceso denegado: ruta inválida"}), 403
     return send_from_directory(d["path"], rel)
 
 
+# ── File listing ────────────────────────────────────────────
+
 @app.route("/api/folders", methods=["GET"])
+@login_required
 def get_folders():
     folders = []
     for d in get_music_dirs():
@@ -141,19 +269,15 @@ def get_folders():
 
 
 @app.route("/api/files", methods=["GET"])
+@login_required
 def get_files():
     return jsonify(list_files())
 
 
-@app.route("/api/cover/<path:filename>")
-def serve_cover(filename):
-    d, rel = resolve_path(filename)
-    if not is_safe_path(d["path"], rel):
-        return jsonify({"error": "Acceso denegado: ruta inválida"}), 403
-    return send_from_directory(d["path"], rel)
-
+# ── Config ──────────────────────────────────────────────────
 
 @app.route("/api/config", methods=["GET"])
+@login_required
 def get_config_api():
     cfg = get_config()
     cfg["music_dirs"] = get_music_dirs()
@@ -162,6 +286,8 @@ def get_config_api():
 
 
 @app.route("/api/config", methods=["PUT"])
+@login_required
+@limit(10, 60)
 def set_config_api():
     data = request.json
     config = get_config()
@@ -186,7 +312,6 @@ def set_config_api():
         else:
             return jsonify({"error": "Ninguna carpeta es válida"}), 400
 
-    # Backward compat: single music_dir
     if "music_dir" in data and "music_dirs" not in data:
         new_dir = os.path.expanduser(data["music_dir"])
         if os.path.isdir(new_dir):
@@ -197,130 +322,240 @@ def set_config_api():
 
     update_config(config)
     if changed_dir:
-        set_list_cache(None)
+        from files import get_list_cache
+        get_list_cache().invalidate(reason="music dirs changed")
+
     cfg = get_config()
     cfg["music_dirs"] = get_music_dirs()
     cfg["default_music_dir"] = DEFAULT_DIR
     return jsonify({"status": "ok", "config": cfg})
 
 
-def is_safe_path(directory, path):
-    if not isinstance(path, str) or ".." in path:
-        return False
-    resolved = os.path.realpath(os.path.join(directory, path))
-    allowed = os.path.realpath(directory)
-    return resolved.startswith(allowed + os.sep) or resolved == allowed
+# ══════════════════════════════════════════════════════════════
+# IMMICH ROUTES
+# ══════════════════════════════════════════════════════════════
+
+@app.route("/api/immich/config", methods=["GET"])
+@login_required
+def get_immich_config_api():
+    return jsonify(immich_handle_get_config())
 
 
-def is_valid_song_path(path):
+@app.route("/api/immich/config", methods=["PUT"])
+@login_required
+@limit(5, 60)
+def set_immich_config_api():
+    result = immich_handle_set_config(request.json)
+    if isinstance(result, tuple) and len(result) == 2:
+        return jsonify(result[0]), result[1]
+    return jsonify(result)
+
+
+@app.route("/api/immich/albums")
+@login_required
+def immich_albums():
+    data, err = immich_api("/albums")
+    if err:
+        return jsonify({"error": err}), 400
+    return jsonify(data)
+
+
+@app.route("/api/immich/albums", methods=["POST"])
+@login_required
+@limit(10, 60)
+def immich_create_album():
+    data = request.json
+    name = (data or {}).get("albumName", "").strip()
+    description = (data or {}).get("description", "").strip()
+    if not name:
+        return jsonify({"error": "Nombre del álbum requerido"}), 400
+    body = {"albumName": name}
+    if description:
+        body["description"] = description
+    result, err = immich_api_request("POST", "/albums", data=body)
+    if err:
+        return jsonify({"error": err}), 400
+    return jsonify(result)
+
+
+@app.route("/api/immich/albums/<album_id>")
+@login_required
+def immich_album(album_id):
+    data, err = immich_api("/albums/" + album_id)
+    if err:
+        return jsonify({"error": err}), 400
+    return jsonify(data)
+
+
+@app.route("/api/immich/albums/<album_id>", methods=["DELETE"])
+@login_required
+@limit(10, 60)
+def immich_delete_album(album_id):
+    result, err = immich_api_request("DELETE", f"/albums/{album_id}")
+    if err:
+        return jsonify({"error": err}), 400
+    return jsonify({"status": "deleted"})
+
+
+@app.route("/api/immich/albums/<album_id>/rename", methods=["PUT"])
+@login_required
+@limit(10, 60)
+def immich_rename_album(album_id):
+    data = request.json
+    name = (data or {}).get("name", "").strip()
+    if not name:
+        return jsonify({"error": "Nombre requerido"}), 400
+    result, err = immich_api_request("PUT", f"/albums/{album_id}", data={"albumName": name})
+    if err:
+        return jsonify({"error": err}), 400
+    return jsonify(result)
+
+
+@app.route("/api/immich/albums/<album_id>/assets", methods=["PUT"])
+@login_required
+@limit(10, 60)
+def immich_add_assets(album_id):
+    data = request.json
+    ids = (data or {}).get("ids", [])
+    if not ids:
+        return jsonify({"error": "Se requiere al menos un assetId"}), 400
+    result, err = immich_api_request("PUT", f"/albums/{album_id}/assets", data={"ids": ids})
+    if err:
+        return jsonify({"error": err}), 400
+    return jsonify(result)
+
+
+@app.route("/api/immich/media/<asset_id>")
+@login_required
+def immich_media(asset_id):
+    return proxy_immich(asset_id, "original")
+
+
+@app.route("/api/immich/thumbnail/<asset_id>")
+@login_required
+def immich_thumbnail(asset_id):
+    return proxy_immich(asset_id, "thumbnail")
+
+
+@app.route("/api/immich/assets/<asset_id>/rename", methods=["PUT"])
+@login_required
+@limit(10, 60)
+def immich_rename_asset(asset_id):
+    data = request.json
+    name = (data or {}).get("name", "").strip()
+    if not name:
+        return jsonify({"error": "Nombre requerido"}), 400
+    result, err = immich_api_request("PUT", f"/assets/{asset_id}", data={"originalFileName": name})
+    if err:
+        return jsonify({"error": err}), 400
+    return jsonify(result)
+
+
+@app.route("/api/immich/upload", methods=["POST"])
+@login_required
+@limit(5, 60)
+def immich_upload():
+    result = immich_handle_upload()
+    if isinstance(result, tuple) and len(result) >= 2:
+        return jsonify(result[0]), result[1]
+    return jsonify(result)
+
+
+@app.route("/api/immich/upload-compressed", methods=["POST"])
+@login_required
+@limit(2, 60)  # stricter limit due to CPU cost
+def immich_upload_compressed():
+    result = immich_handle_upload_compressed()
+    if isinstance(result, tuple) and len(result) >= 2:
+        return jsonify(result[0]), result[1]
+    return jsonify(result)
+
+
+@app.route("/api/immich/queue", methods=["POST"])
+@login_required
+@limit(5, 60)
+def immich_queue_add():
+    if "file" not in request.files:
+        return jsonify({"error": "No se envió ningún archivo"}), 400
+    file = request.files["file"]
+    if not file.filename:
+        return jsonify({"error": "Nombre de archivo vacío"}), 400
+
+    album_id = request.form.get("albumId")
+    compress = request.form.get("compress", "false").lower() == "true"
     try:
-        d, rel = resolve_path(path)
-        return is_safe_path(d["path"], rel)
-    except Exception:
-        return False
+        crf = int(request.form.get("crf", 28))
+    except (ValueError, TypeError):
+        return jsonify({"error": "CRF must be an integer"}), 400
+
+    data_stream = io.BytesIO(file.read())
+    job = upload_queue.add_job(
+        filename=file.filename,
+        album_id=album_id,
+        crf=crf,
+        compress=compress,
+        data_stream=data_stream,
+    )
+
+    return jsonify({
+        "status": "queued",
+        "jobId": job.id,
+        "filename": job.filename,
+    }), 202
 
 
-def get_playlists():
-    if os.path.exists(PLAYLISTS_FILE):
-        with open(PLAYLISTS_FILE) as f:
-            return json.load(f)
-    return []
+@app.route("/api/immich/queue", methods=["GET"])
+@login_required
+def immich_queue_list():
+    jobs = upload_queue.get_jobs()
+    return jsonify([{
+        "id": j.id,
+        "filename": j.filename,
+        "status": j.status.value,
+        "progress": j.progress,
+        "originalSize": j.original_size,
+        "compressedSize": j.compressed_size,
+        "assetId": j.asset_id,
+        "error": j.error,
+        "createdAt": j.created_at,
+    } for j in jobs])
 
 
-def save_playlists(playlists):
-    with open(PLAYLISTS_FILE, "w") as f:
-        json.dump(playlists, f, indent=2)
+@app.route("/api/immich/queue/<job_id>", methods=["GET"])
+@login_required
+def immich_queue_get(job_id):
+    job = upload_queue.get_job(job_id)
+    if job is None:
+        return jsonify({"error": "Job no encontrado"}), 404
+    return jsonify({
+        "id": job.id,
+        "filename": job.filename,
+        "status": job.status.value,
+        "progress": job.progress,
+        "originalSize": job.original_size,
+        "compressedSize": job.compressed_size,
+        "assetId": job.asset_id,
+        "error": job.error,
+        "createdAt": job.created_at,
+    })
 
 
-def update_config(config):
-    existing = get_config()
-    existing.update(config)
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(existing, f)
+@app.route("/api/immich/queue/<job_id>", methods=["DELETE"])
+@login_required
+@limit(10, 60)
+def immich_queue_cancel(job_id):
+    job = upload_queue.cancel_job(job_id)
+    if job is None:
+        return jsonify({"error": "Job no encontrado"}), 404
+    return jsonify({"status": "cancelled", "jobId": job.id})
 
 
-# ── Immich ──────────────────────────────────────────────────────
-
-def get_immich_config():
-    cfg = get_config()
-    return {
-        "url": cfg.get("immich_url", "").rstrip("/"),
-        "apiKey": cfg.get("immich_api_key", ""),
-    }
-
-
-def immich_api(path):
-    cfg = get_immich_config()
-    if not cfg["url"] or not cfg["apiKey"]:
-        return None, "Immich no configurado"
-    url = cfg["url"] + "/api" + path
-    try:
-        resp = requests.get(url, headers={
-            "x-api-key": cfg["apiKey"],
-            "Accept": "application/json",
-        }, timeout=15)
-        if resp.status_code == 401:
-            return None, "API key inválida"
-        if resp.status_code == 404:
-            return None, "Recurso no encontrado"
-        resp.raise_for_status()
-        return resp.json(), None
-    except requests.ConnectionError:
-        return None, "No se pudo conectar con Immich"
-    except Exception as e:
-        return None, str(e)
-
-
-def proxy_immich(asset_id, endpoint):
-    cfg = get_immich_config()
-    if not cfg["url"] or not cfg["apiKey"]:
-        return jsonify({"error": "Immich no configurado"}), 400
-    url = cfg["url"] + "/api/assets/" + asset_id + "/" + endpoint
-    headers = {"x-api-key": cfg["apiKey"]}
-    range_h = request.headers.get("Range")
-    if range_h:
-        headers["Range"] = range_h
-    try:
-        resp = requests.get(url, headers=headers, stream=True, timeout=30)
-        if resp.status_code in (401, 403):
-            return jsonify({"error": "Sin permisos para acceder al archivo en Immich"}), resp.status_code
-        if resp.status_code == 404:
-            return jsonify({"error": "Archivo no encontrado en Immich"}), 404
-        out_headers = {}
-        for k, v in resp.headers.items():
-            lk = k.lower()
-            if lk in ("content-type", "content-length", "content-range",
-                      "accept-ranges", "content-disposition", "cache-control",
-                      "etag", "last-modified"):
-                out_headers[k] = v
-        def gen():
-            for chunk in resp.iter_content(65536):
-                if chunk:
-                    yield chunk
-        return Response(gen(), status=resp.status_code,
-                        headers=out_headers, direct_passthrough=True)
-    except requests.Timeout:
-        return jsonify({"error": "Timeout al conectar con Immich"}), 504
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-# ── Invidious ───────────────────────────────────────────────────
-
-INVIDIOUS_URLS = ["http://invidious:3000", "http://localhost:3000"]
-
-def get_invidious_url():
-    for url in INVIDIOUS_URLS:
-        try:
-            r = requests.get(url + "/api/v1/stats", timeout=3)
-            if r.ok:
-                return url
-        except Exception:
-            continue
-    return None
-
+# ══════════════════════════════════════════════════════════════
+# INVIDIOUS ROUTES
+# ══════════════════════════════════════════════════════════════
 
 @app.route("/api/invidious/search")
+@login_required
 def invidious_search():
     q = request.args.get("q", "").strip()
     if not q:
@@ -341,6 +576,7 @@ def invidious_search():
 
 
 @app.route("/api/invidious/trending")
+@login_required
 def invidious_trending():
     base = get_invidious_url()
     if not base:
@@ -352,44 +588,24 @@ def invidious_trending():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/invidious/<path:subpath>")
-def invidious_proxy(subpath):
+@app.route("/api/invidious/video/<videoId>")
+@login_required
+def invidious_video(videoId):
     base = get_invidious_url()
     if not base:
         return jsonify({"error": "Invidious no disponible"}), 503
     try:
-        resp = requests.get(base + "/" + subpath, stream=True, timeout=30)
-        out = {}
-        for k, v in resp.headers.items():
-            lk = k.lower()
-            if lk in ("content-type", "content-length", "cache-control"):
-                out[k] = v
-        return Response(resp.iter_content(65536), status=resp.status_code,
-                        headers=out, direct_passthrough=True)
+        resp = requests.get(base + f"/api/v1/videos/{videoId}", timeout=15)
+        if not resp.ok:
+            return jsonify({"error": "Error al obtener video"}), resp.status_code
+        return jsonify(resp.json())
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
-def get_invidious_sid():
-    cfg = get_config()
-    return cfg.get("invidious_sid", "")
-
-
-def save_invidious_sid(sid):
-    cfg = get_config()
-    cfg["invidious_sid"] = sid
-    update_config(cfg)
-
-
-def invidious_auth_headers():
-    sid = get_invidious_sid()
-    h = {"Content-Type": "application/json"}
-    if sid:
-        h["Cookie"] = f"SID={sid}"
-    return h
-
-
 @app.route("/api/invidious/login", methods=["POST"])
+@login_required
+@limit(5, 60)
 def invidious_login():
     data = request.json
     username = (data or {}).get("username", "")
@@ -400,7 +616,6 @@ def invidious_login():
     if not base:
         return jsonify({"error": "Invidious no disponible"}), 503
     try:
-        # Login via Invidious form endpoint (returns SID cookie)
         resp = requests.post(base + "/login",
                              data={"email": username, "password": password,
                                    "action": "login", "referer": ""},
@@ -420,6 +635,7 @@ def invidious_login():
 
 
 @app.route("/api/invidious/logout", methods=["POST"])
+@login_required
 def invidious_logout():
     save_invidious_sid("")
     cfg = get_config()
@@ -441,38 +657,8 @@ def invidious_status():
     })
 
 
-def invidious_auth_get(path):
-    base = get_invidious_url()
-    if not base:
-        return None, "Invidious no disponible"
-    try:
-        resp = requests.get(base + path, headers=invidious_auth_headers(), timeout=15)
-        if resp.status_code == 401:
-            return None, "Sesión expirada"
-        resp.raise_for_status()
-        return resp.json(), None
-    except Exception as e:
-        return None, str(e)
-
-
-def invidious_auth_post(path, data=None):
-    base = get_invidious_url()
-    if not base:
-        return None, "Invidious no disponible"
-    try:
-        resp = requests.post(base + path, json=data or {},
-                             headers=invidious_auth_headers(), timeout=15)
-        if resp.status_code == 401:
-            return None, "Sesión expirada"
-        resp.raise_for_status()
-        if resp.status_code == 204 or not resp.content:
-            return {"status": "ok"}, None
-        return resp.json(), None
-    except Exception as e:
-        return None, str(e)
-
-
 @app.route("/api/invidious/subscriptions", methods=["GET"])
+@login_required
 def invidious_subscriptions():
     data, err = invidious_auth_get("/api/v1/auth/subscriptions")
     if err:
@@ -480,64 +666,19 @@ def invidious_subscriptions():
     return jsonify(data)
 
 
-_feed_cache = {"data": None, "updated": 0, "ttl": 300}
-
 @app.route("/api/invidious/feed")
+@login_required
 def invidious_feed():
     max_results = int(request.args.get("max_results", "50"))
-
-    now = time.time()
-    cached = _feed_cache["data"]
-    if cached and (now - _feed_cache["updated"]) < _feed_cache["ttl"]:
-        return jsonify(cached[:max_results])
-
-    subs, err = invidious_auth_get("/api/v1/auth/subscriptions")
-    if err:
-        return jsonify({"error": err}), 401
-    if not subs:
-        return jsonify([])
-
-    base = get_invidious_url()
-    if not base:
-        return jsonify([])
-
-    videos = []
-    seen = set()
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
-        futures = {
-            pool.submit(
-                requests.get,
-                base + f"/api/v1/channels/{ch.get('authorId') or ch.get('ucid') or ''}/videos",
-                params={"sort": "newest"},
-                timeout=10,
-            ): ch
-            for ch in subs if ch.get("authorId") or ch.get("ucid")
-        }
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                resp = future.result()
-                if not resp.ok:
-                    continue
-                channel_data = resp.json()
-                channel_videos = channel_data if isinstance(channel_data, list) else channel_data.get("videos", [])
-                for v in channel_videos[:5]:
-                    vid = v.get("videoId")
-                    if vid and vid not in seen:
-                        seen.add(vid)
-                        videos.append(v)
-            except Exception:
-                continue
-
-    videos.sort(key=lambda v: v.get("published") or 0, reverse=True)
-
-    _feed_cache["data"] = videos
-    _feed_cache["updated"] = time.time()
-
-    return jsonify(videos[:max_results])
+    feed = get_feed(max_results)
+    if feed is None:
+        return jsonify({"error": "No se pudo obtener el feed"}), 401
+    return jsonify(feed)
 
 
 @app.route("/api/invidious/subscribe", methods=["POST"])
+@login_required
+@limit(10, 60)
 def invidious_subscribe():
     data = request.json
     ucid = (data or {}).get("ucid", "")
@@ -550,6 +691,8 @@ def invidious_subscribe():
 
 
 @app.route("/api/invidious/unsubscribe", methods=["POST"])
+@login_required
+@limit(10, 60)
 def invidious_unsubscribe():
     data = request.json
     ucid = (data or {}).get("ucid", "")
@@ -570,6 +713,7 @@ def invidious_unsubscribe():
 
 
 @app.route("/api/invidious/channel/<ucid>")
+@login_required
 def invidious_channel_videos(ucid):
     base = get_invidious_url()
     if not base:
@@ -584,88 +728,19 @@ def invidious_channel_videos(ucid):
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/immich/config", methods=["GET"])
-def get_immich_config_api():
-    cfg = get_immich_config()
-    return jsonify({"url": cfg["url"], "connected": bool(cfg["url"] and cfg["apiKey"])})
+# ══════════════════════════════════════════════════════════════
+# PLAYLIST ROUTES
+# ══════════════════════════════════════════════════════════════
 
-
-@app.route("/api/immich/config", methods=["PUT"])
-def set_immich_config_api():
-    data = request.json
-    url = (data.get("url") or "").rstrip("/")
-    api_key = data.get("apiKey") or ""
-    if not url or not api_key:
-        return jsonify({"error": "URL y API key requeridas"}), 400
-    try:
-        r = requests.get(url + "/api/albums", headers={"x-api-key": api_key}, timeout=10)
-        if r.status_code == 401:
-            return jsonify({"error": "API key inválida"}), 400
-        r.raise_for_status()
-    except requests.ConnectionError:
-        return jsonify({"error": "No se pudo conectar con Immich"}), 400
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
-    cfg = get_config()
-    cfg["immich_url"] = url
-    cfg["immich_api_key"] = api_key
-    update_config(cfg)
-    return jsonify({"status": "ok", "url": url, "connected": True})
-
-
-@app.route("/api/immich/albums")
-def immich_albums():
-    data, err = immich_api("/albums")
-    if err:
-        return jsonify({"error": err}), 400
-    return jsonify(data)
-
-
-@app.route("/api/immich/albums/<album_id>")
-def immich_album(album_id):
-    data, err = immich_api("/albums/" + album_id)
-    if err:
-        return jsonify({"error": err}), 400
-    return jsonify(data)
-
-
-@app.route("/api/immich/media/<asset_id>")
-def immich_media(asset_id):
-    return proxy_immich(asset_id, "original")
-
-
-@app.route("/api/immich/thumbnail/<asset_id>")
-def immich_thumbnail(asset_id):
-    return proxy_immich(asset_id, "thumbnail")
-
-
-# ── Playlist helpers ────────────────────────────────────────────
-
-def normalize_song(s):
-    if isinstance(s, str):
-        return {"type": "local", "path": s,
-                "name": os.path.basename(s) if "/" in s else s}
-    if isinstance(s, dict) and s.get("type") == "immich":
-        return {"type": "immich", "assetId": s["assetId"],
-                "name": s.get("originalName", "Video")}
-    if isinstance(s, dict) and s.get("type") == "youtube":
-        return {"type": "youtube", "videoId": s["videoId"],
-                "name": s.get("originalName", "Video")}
-    return s
-
-
-def normalize_playlist(p):
-    p["songs"] = [normalize_song(s) for s in p["songs"]]
-    return p
-
-
-# Playlist endpoints
 @app.route("/api/playlists", methods=["GET"])
+@login_required
 def list_playlists():
-    return jsonify([normalize_playlist(p) for p in get_playlists()])
+    return jsonify(normalize_playlists(get_playlists()))
 
 
 @app.route("/api/playlists", methods=["POST"])
+@login_required
+@limit(20, 60)
 def create_playlist():
     data = request.json
     name = data.get("name", "").strip()
@@ -693,6 +768,8 @@ def create_playlist():
 
 
 @app.route("/api/playlists/<int:pid>", methods=["PUT"])
+@login_required
+@limit(20, 60)
 def rename_playlist(pid):
     data = request.json
     name = data.get("name", "").strip()
@@ -708,6 +785,8 @@ def rename_playlist(pid):
 
 
 @app.route("/api/playlists/<int:pid>", methods=["DELETE"])
+@login_required
+@limit(10, 60)
 def delete_playlist(pid):
     playlists = get_playlists()
     playlists = [p for p in playlists if p["id"] != pid]
@@ -716,9 +795,10 @@ def delete_playlist(pid):
 
 
 @app.route("/api/playlists/<int:pid>/songs", methods=["POST"])
+@login_required
+@limit(30, 60)
 def add_to_playlist(pid):
     data = request.json
-    # Immich entry
     if data.get("type") == "immich":
         asset_id = data.get("assetId")
         if not asset_id:
@@ -732,7 +812,6 @@ def add_to_playlist(pid):
                 save_playlists(playlists)
                 return jsonify(normalize_playlist(p))
         return jsonify({"error": "Playlist no encontrada"}), 404
-    # YouTube entry
     if data.get("type") == "youtube":
         video_id = data.get("videoId")
         if not video_id:
@@ -746,7 +825,6 @@ def add_to_playlist(pid):
                 save_playlists(playlists)
                 return jsonify(normalize_playlist(p))
         return jsonify({"error": "Playlist no encontrada"}), 404
-    # Local entry
     song_path = data.get("path")
     if not song_path:
         return jsonify({"error": "Path requerido"}), 400
@@ -763,6 +841,7 @@ def add_to_playlist(pid):
 
 
 @app.route("/api/playlists/<int:pid>/songs/<path:song_path>", methods=["DELETE"])
+@login_required
 def remove_from_playlist(pid, song_path):
     if not is_valid_song_path(song_path):
         return jsonify({"error": "Acceso denegado: ruta inválida"}), 403
@@ -776,6 +855,7 @@ def remove_from_playlist(pid, song_path):
 
 
 @app.route("/api/playlists/<int:pid>/songs", methods=["DELETE"])
+@login_required
 def remove_song_from_playlist(pid):
     data = request.json
     if not data:
@@ -805,5 +885,12 @@ def remove_song_from_playlist(pid):
     return jsonify({"error": "Playlist no encontrada"}), 404
 
 
+# ══════════════════════════════════════════════════════════════
+# MAIN
+# ══════════════════════════════════════════════════════════════
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    debug = os.environ.get("FLASK_DEBUG", "1") == "1"
+    logger.info("Server starting on port %d (debug=%s)", port, debug)
+    app.run(host="0.0.0.0", port=port, debug=debug)

@@ -8,7 +8,14 @@ services:
       - ./music:/music:ro
       - ./config.json:/app/config.json
       - ./playlists.json:/app/playlists.json
+      - ./.secret.key:/app/.secret.key
     restart: unless-stopped
+    healthcheck:
+      test: python -c "import urllib.request; exit(0 if urllib.request.urlopen('http://localhost:5000/api/health').status == 200 else 1)"
+      interval: 30s
+      timeout: 10s
+      start_period: 5s
+      retries: 3
 
   invidious-db:
     image: docker.io/library/postgres:14

@@ -10,6 +10,10 @@ __pycache__/
 # User media
 music/
 
+# Encryption key for sensitive config values
+.secret.key
+
 # OS
 .DS_Store
 Thumbs.db
+rate_limits.db

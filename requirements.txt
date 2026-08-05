@@ -1,2 +1,6 @@
 flask>=3.0.0
 requests>=2.31.0
+cryptography>=41.0.0
+watchdog>=4.0.0
+gunicorn>=22.0.0
+flask-limiter>=3.7.0
