@@ -1,6 +1,18 @@
 /* ==================== STATE ==================== */
 const API_BASE = '/api';
 
+/* Make a value safe to embed inside a single-quoted JS string literal used in
+   inline event handlers (onclick="fn('VALUE')"). encodeURIComponent leaves
+   apostrophes unescaped, so raw paths/names containing ' break the string. */
+function jsStr(s) {
+  return String(s == null ? '' : s)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r');
+}
+
 let audio = null;
 let video = null;
 let allTracks = [];
@@ -25,6 +37,11 @@ let youtubePlaying = null; // {videoId, title} when iframe is open
 let invidiousLoggedIn = false;
 let invidiousUsername = '';
 let youtubeFeed = [];
+
+/* ==================== LOCAL FILTERS STATE (mirror YouTube) ==================== */
+let localFilterType = 'all';   // 'all' | 'audio' | 'video'
+let localSort = 'name';        // 'name' | 'name_desc' | 'date' | 'date_desc'
+let localDateWindow = '';      // '' | 'today' | 'week' | 'month' | 'year'
 
 /* ==================== IMMICH STATE ==================== */
 let immichConfig = { url: '', connected: false };
@@ -235,9 +252,87 @@ function applyFilters() {
   if (currentFolder) {
     filtered = filtered.filter(t => t.path.startsWith(currentFolder + '/'));
   }
+  if (localFilterType !== 'all') {
+    filtered = filtered.filter(t => t.type === localFilterType);
+  }
+  if (localDateWindow) {
+    const windows = { today: 86400, week: 604800, month: 2592000, year: 31536000 };
+    const w = windows[localDateWindow];
+    if (w) {
+      filtered = filtered.filter(t => Date.now() / 1000 - (t.mtime || 0) <= w);
+    }
+  }
+  switch (localSort) {
+    case 'name_desc':
+      filtered.sort((a, b) => -naturalCompare(a.name, b.name));
+      break;
+    case 'date':
+      filtered.sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
+      break;
+    case 'date_desc':
+      filtered.sort((a, b) => (a.mtime || 0) - (b.mtime || 0));
+      break;
+    default:
+      filtered.sort((a, b) => naturalCompare(a.name, b.name));
+  }
   tracks = filtered;
   renderContent();
   renderSidebar();
+}
+
+function removeLocalFilterBar() {
+  const existing = document.getElementById('localFilterBar');
+  if (existing) existing.remove();
+}
+
+function renderLocalFilterBar() {
+  removeLocalFilterBar();
+  if (immichView || currentPlaylistId) return;
+  const listView = document.getElementById('listView');
+  if (!listView) return;
+
+  const bar = document.createElement('div');
+  bar.id = 'localFilterBar';
+  bar.className = 'youtube-filters';
+  bar.innerHTML = `
+    <span class="youtube-filter-label">Tipo:</span>
+    <select class="youtube-filter-select" id="localFilterType" onchange="localFilterType=this.value;applyFilters()">
+      <option value="all">Todas</option>
+      <option value="audio">🎵 Audio</option>
+      <option value="video">🎬 Video</option>
+    </select>
+    <span class="youtube-filter-label">Ordenar:</span>
+    <select class="youtube-filter-select" id="localSort" onchange="localSort=this.value;applyFilters()">
+      <option value="name">Nombre A→Z</option>
+      <option value="name_desc">Nombre Z→A</option>
+      <option value="date">Más recientes</option>
+      <option value="date_desc">Más antiguos</option>
+    </select>
+    <span class="youtube-filter-label">Fecha:</span>
+    <select class="youtube-filter-select" id="localDateWindow" onchange="localDateWindow=this.value;applyFilters()">
+      <option value="">Cualquiera</option>
+      <option value="today">Hoy</option>
+      <option value="week">Esta semana</option>
+      <option value="month">Este mes</option>
+      <option value="year">Este año</option>
+    </select>`;
+
+  listView.parentNode.insertBefore(bar, listView);
+  document.getElementById('localFilterType').value = localFilterType;
+  document.getElementById('localSort').value = localSort;
+  document.getElementById('localDateWindow').value = localDateWindow;
+}
+
+function dedupeYouTube(arr) {
+  const seen = new Set();
+  const out = [];
+  for (const r of arr || []) {
+    if (r && r.videoId && !seen.has(r.videoId)) {
+      seen.add(r.videoId);
+      out.push(r);
+    }
+  }
+  return out;
 }
 
 async function loadFolders() {
@@ -442,13 +537,13 @@ function renderImmichAlbumsView() {
       const dn = (a.originalFileName || a.id).replace(/\.[^/.]+$/, '');
       const thumb = `${API_BASE}/immich/thumbnail/${a.id}`;
       const encodedId = encodeURIComponent(a.id);
-      return `<div class="grid-item" style="cursor:pointer" oncontextmenu="event.preventDefault();event.stopPropagation();showImmichContextMenu(event,'${encodedId}','${escapeHtml(dn)}')">
+      return `<div class="grid-item" style="cursor:pointer" oncontextmenu="event.preventDefault();event.stopPropagation();showImmichContextMenu(event,'${encodedId}','${jsStr(dn)}')">
         <div class="grid-art">
           <img src="${thumb}" alt="" onerror="this.parentElement.innerHTML='<div class=\\'grid-art-placeholder\\' style=\\'background:var(--gradient-accent)\\'>🎬</div>'">
-          <button class="grid-play-btn" onclick="event.stopPropagation(); playImmichTrack('${encodedId}', '${escapeHtml(dn)}')">▶</button>
+          <button class="grid-play-btn" onclick="event.stopPropagation(); playImmichTrack('${encodedId}', '${jsStr(dn)}')">▶</button>
         </div>
         <div class="grid-title">${escapeHtml(dn)}</div>
-        <div class="grid-meta"><button class="track-action-btn" onclick="event.stopPropagation(); showImmichAddMenu(event, '${encodedId}', '${escapeHtml(dn)}')">+ Añadir</button></div>
+        <div class="grid-meta"><button class="track-action-btn" onclick="event.stopPropagation(); showImmichAddMenu(event, '${encodedId}', '${jsStr(dn)}')">+ Añadir</button></div>
       </div>`;
     }).join('');
   }
@@ -492,7 +587,7 @@ function showImmichAddMenu(event, encodedId, name) {
     html += '<div class="submenu-item" style="color:var(--text-tertiary)">No hay playlists</div>';
   } else {
     playlists.forEach(p => {
-      html += `<div class="submenu-item" onclick="addImmichToPlaylist(${p.id}, '${encodedId}', '${name.replace(/'/g, "\\'")}'); hideAddMenu();">${escapeHtml(p.name)}</div>`;
+      html += `<div class="submenu-item" onclick="addImmichToPlaylist(${p.id}, '${encodedId}', '${jsStr(name)}'); hideAddMenu();">${escapeHtml(p.name)}</div>`;
     });
   }
   menu.innerHTML = html;
@@ -609,12 +704,12 @@ function showImmichContextMenu(event, encodedId, name) {
   menu.style.position = 'fixed';
 
   let html = `<div class="context-menu-title">${escapeHtml(name)}</div>`;
-  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); playImmichTrack('${encodedId}', '${escapeHtml(name)}')">▶ Reproducir</div>`;
-  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); addImmichToQueue('${encodedId}', '${escapeHtml(name)}')">⬇ Agregar a la cola</div>`;
-  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); showImmichAddMenu(event, '${encodedId}', '${escapeHtml(name)}')">+ Añadir a playlist</div>`;
+  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); playImmichTrack('${encodedId}', '${jsStr(name)}')">▶ Reproducir</div>`;
+  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); addImmichToQueue('${encodedId}', '${jsStr(name)}')">⬇ Agregar a la cola</div>`;
+  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); showImmichAddMenu(event, '${encodedId}', '${jsStr(name)}')">+ Añadir a playlist</div>`;
   html += `<div class="context-menu-divider"></div>`;
-  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); renameImmichAsset('${encodedId}', '${escapeHtml(name).replace(/'/g, "\\'")}')">✏ Renombrar</div>`;
-  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); showImmichProperties('${encodedId}', '${escapeHtml(name)}')">ℹ Propiedades</div>`;
+  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); renameImmichAsset('${encodedId}', '${jsStr(name)}')">✏ Renombrar</div>`;
+  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); showImmichProperties('${encodedId}', '${jsStr(name)}')">ℹ Propiedades</div>`;
 
   menu.innerHTML = html;
   document.body.appendChild(menu);
@@ -683,10 +778,10 @@ function showAlbumContextMenu(event, encodedId, name, assetCount) {
 
   let html = `<div class="context-menu-title">${escapeHtml(name)}</div>`;
   html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); loadImmichAlbum('${encodedId}')">📂 Abrir álbum</div>`;
-  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); renameImmichAlbum('${encodedId}', '${escapeHtml(name).replace(/'/g, "\\'")}')">✏ Renombrar</div>`;
-  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); showAlbumProperties('${encodedId}', '${escapeHtml(name).replace(/'/g, "\\'")}', ${assetCount})">ℹ Propiedades</div>`;
+  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); renameImmichAlbum('${encodedId}', '${jsStr(name)}')">✏ Renombrar</div>`;
+  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); showAlbumProperties('${encodedId}', '${jsStr(name)}', ${assetCount})">ℹ Propiedades</div>`;
   html += `<div class="context-menu-divider"></div>`;
-  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); deleteImmichAlbum('${encodedId}', '${escapeHtml(name).replace(/'/g, "\\'")}')" style="color:var(--accent-rose)">✕ Eliminar álbum</div>`;
+  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); deleteImmichAlbum('${encodedId}', '${jsStr(name)}')" style="color:var(--accent-rose)">✕ Eliminar álbum</div>`;
 
   menu.innerHTML = html;
   document.body.appendChild(menu);
@@ -765,6 +860,7 @@ async function confirmImmichConfig() {
   if (!url || !apiKey) { document.getElementById('immichConfigStatus').textContent = 'Completa ambos campos'; return; }
   const btn = document.getElementById('immichConfigSaveBtn');
   const status = document.getElementById('immichConfigStatus');
+  btn.disabled = true;
   btn.textContent = 'Conectando...';
   status.textContent = '';
   try {
@@ -773,12 +869,21 @@ async function confirmImmichConfig() {
       body: JSON.stringify({ url, apiKey }),
     });
     const data = await res.json();
-    if (data.error) { status.textContent = data.error; btn.textContent = 'Conectar'; return; }
+    if (data.error) {
+      status.textContent = data.error;
+      btn.disabled = false;
+      btn.textContent = 'Conectar';
+      return;
+    }
     immichConfig = { url: data.url, connected: true };
     hideImmichConfig();
     renderImmichSidebar();
     loadImmichAlbums();
-  } catch (e) { status.textContent = 'Error de conexión'; btn.textContent = 'Conectar'; }
+  } catch (e) {
+    status.textContent = 'Error de conexión';
+    btn.disabled = false;
+    btn.textContent = 'Conectar';
+  }
 }
 
 async function disconnectImmich() {
@@ -981,6 +1086,7 @@ async function showYouTubeSearch() {
   immichView = null;
   currentPlaylistId = null;
   currentFolder = null;
+  removeLocalFilterBar();
   renderImmichSidebar();
   renderFolderList();
   renderSidebar();
@@ -1042,7 +1148,7 @@ async function doYouTubeSearch() {
     const res = await fetch(url);
     if (!res.ok) { container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error al buscar</div></div>'; return; }
     const data = await res.json();
-    youtubeResults = data.filter(r => (r.type === 'video' || r.type === 'shortVideo' || r.videoId));
+    youtubeResults = dedupeYouTube(data.filter(r => (r.type === 'video' || r.type === 'shortVideo' || r.videoId)));
     renderYouTubeResults(container);
   } catch (e) {
     container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error de conexión</div></div>';
@@ -1059,23 +1165,24 @@ function renderYouTubeResults(container) {
     const thumbUrl = `https://i.ytimg.com/vi/${v.videoId}/mqdefault.jpg`;
     const author = v.author || 'Desconocido';
     const duration = v.lengthSeconds ? formatTime(v.lengthSeconds) : '';
+    const published = v.publishedText || (v.published ? new Date(v.published * 1000).toLocaleDateString() : '');
     const encodedId = encodeURIComponent(v.videoId);
     const ucid = v.authorId || '';
     const subBtn = invidiousLoggedIn && ucid
-      ? `<button class="track-action-btn" onclick="event.stopPropagation(); subscribeToChannel('${ucid}','${escapeHtml(author).replace(/'/g, "\\'")}',this)">🔔 Subscribir</button>`
+      ? `<button class="track-action-btn" onclick="event.stopPropagation(); subscribeToChannel('${ucid}','${jsStr(author)}',this)">🔔 Subscribir</button>`
       : '';
     const art = `<img src="${thumbUrl}" alt="" onerror="this.parentElement.innerHTML='<div class=\\'track-art-placeholder\\' style=\\'background:${getTrackColor(i)}\\'>▶</div>'">`;
-    return `<div class="track-item" style="cursor:pointer" onclick="playYouTubeVideo('${encodedId}','${escapeHtml(dn).replace(/'/g, "\\'")}')" oncontextmenu="event.preventDefault();event.stopPropagation();showYouTubeContextMenu(event,'${encodedId}','${escapeHtml(dn).replace(/'/g, "\\'")}')">
+    return `<div class="track-item" style="cursor:pointer" onclick="playYouTubeVideo('${encodedId}','${jsStr(dn)}')" oncontextmenu="event.preventDefault();event.stopPropagation();showYouTubeContextMenu(event,'${encodedId}','${jsStr(dn)}')">
       <span class="track-number">${i + 1}</span>
       <div class="track-art">${art}</div>
       <div class="track-info">
         <div class="track-title">${escapeHtml(dn)}</div>
-        <div class="track-meta">${escapeHtml(author)}${duration ? ' · ' + duration : ''}</div>
+        <div class="track-meta">${escapeHtml(author)}${duration ? ' · ' + duration : ''}${published ? ' · ' + escapeHtml(published) : ''}</div>
       </div>
       <div class="track-actions">
         ${subBtn}
-        <button class="track-action-btn queue" onclick="event.stopPropagation(); addYouTubeToQueue('${encodedId}','${escapeHtml(dn).replace(/'/g, "\\'")}')">⬇ Cola</button>
-        <button class="track-action-btn" onclick="event.stopPropagation(); showYouTubeAddMenu(event,'${encodedId}','${escapeHtml(dn).replace(/'/g, "\\'")}')">+ Añadir</button>
+        <button class="track-action-btn queue" onclick="event.stopPropagation(); addYouTubeToQueue('${encodedId}','${jsStr(dn)}')">⬇ Cola</button>
+        <button class="track-action-btn" onclick="event.stopPropagation(); showYouTubeAddMenu(event,'${encodedId}','${jsStr(dn)}')">+ Añadir</button>
       </div>
     </div>`;
   }).join('');
@@ -1088,7 +1195,7 @@ async function loadYouTubeTrending() {
     const res = await fetch(`${API_BASE}/invidious/trending`);
     if (!res.ok) { container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error al cargar</div></div>'; return; }
     const data = await res.json();
-    youtubeResults = data.filter(r => (r.type === 'video' || r.type === 'shortVideo' || r.videoId));
+    youtubeResults = dedupeYouTube(data.filter(r => (r.type === 'video' || r.type === 'shortVideo' || r.videoId)));
     renderYouTubeResults(container);
   } catch (e) {
     container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error de conexión</div></div>';
@@ -1161,7 +1268,7 @@ async function loadYouTubeSubscriptions() {
       container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error</div></div>'; return;
     }
     const data = await res.json();
-    youtubeResults = data.filter(r => (r.type === 'video' || r.type === 'shortVideo' || r.videoId));
+    youtubeResults = dedupeYouTube(data.filter(r => (r.type === 'video' || r.type === 'shortVideo' || r.videoId)));
     renderYouTubeResults(container);
   } catch (e) { container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error de conexión</div></div>'; }
 }
@@ -1211,7 +1318,7 @@ async function loadChannelVideos(encodedUcid, channelName) {
     if (!res.ok) { container.innerHTML = '<div class="empty-state"><div class="empty-state-text">Error</div></div>'; return; }
     const data = await res.json();
     const videos = Array.isArray(data) ? data : (data.videos || []);
-    youtubeResults = videos.filter(r => (r.type === 'video' || r.type === 'shortVideo' || r.videoId));
+    youtubeResults = dedupeYouTube(videos.filter(r => (r.type === 'video' || r.type === 'shortVideo' || r.videoId)));
     const title = document.getElementById('contentTitle');
     title.textContent = `📺 ${escapeHtml(channelName || 'Canal')}`;
     renderYouTubeResults(container);
@@ -1361,11 +1468,11 @@ function showYouTubeContextMenu(event, encodedId, title) {
   menu.style.top = Math.min(event.clientY, window.innerHeight - 180) + 'px';
   menu.style.position = 'fixed';
   let html = `<div class="context-menu-title">${escapeHtml(title)}</div>`;
-  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); playYouTubeVideo('${encodedId}','${escapeHtml(title).replace(/'/g, "\\'")}')">▶ Reproducir</div>`;
-  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); addYouTubeToQueue('${encodedId}','${escapeHtml(title).replace(/'/g, "\\'")}')">⬇ Agregar a la cola</div>`;
-  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); showYouTubeAddMenu(event,'${encodedId}','${escapeHtml(title).replace(/'/g, "\\'")}')">+ Añadir a playlist</div>`;
+  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); playYouTubeVideo('${encodedId}','${jsStr(title)}')">▶ Reproducir</div>`;
+  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); addYouTubeToQueue('${encodedId}','${jsStr(title)}')">⬇ Agregar a la cola</div>`;
+  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); showYouTubeAddMenu(event,'${encodedId}','${jsStr(title)}')">+ Añadir a playlist</div>`;
   html += `<div class="context-menu-divider"></div>`;
-  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); showYouTubeProperties('${encodedId}','${escapeHtml(title).replace(/'/g, "\\'")}')">ℹ Propiedades</div>`;
+  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); showYouTubeProperties('${encodedId}','${jsStr(title)}')">ℹ Propiedades</div>`;
   menu.innerHTML = html;
   document.body.appendChild(menu);
   activeContextMenu = menu;
@@ -1403,7 +1510,7 @@ function showYouTubeAddMenu(event, encodedId, title) {
     html += '<div class="submenu-item" style="color:var(--text-tertiary)">No hay playlists</div>';
   } else {
     playlists.forEach(p => {
-      html += `<div class="submenu-item" onclick="addYouTubeToPlaylist(${p.id},'${encodedId}','${escapeHtml(title).replace(/'/g, "\\'")}'); hideAddMenu();">${escapeHtml(p.name)}</div>`;
+      html += `<div class="submenu-item" onclick="addYouTubeToPlaylist(${p.id},'${encodedId}','${jsStr(title)}'); hideAddMenu();">${escapeHtml(p.name)}</div>`;
     });
   }
   menu.innerHTML = html;
@@ -1501,7 +1608,7 @@ function showAllFolders() {
 }
 
 function renderContent() {
-  if (immichView) { renderImmichAlbumsView(); return; }
+  if (immichView) { removeLocalFilterBar(); renderImmichAlbumsView(); return; }
   // Clean up Immich actions when leaving Immich view
   const immichActions = document.getElementById('immichActions');
   if (immichActions) immichActions.remove();
@@ -1517,6 +1624,9 @@ function renderContent() {
 
   // Back button for folder view
   renderBackButton(currentFolder ? () => goHome() : null);
+
+  if (currentPlaylistId) removeLocalFilterBar();
+  else renderLocalFilterBar();
 }
 
 function renderBackButton(onclick) {
@@ -1560,10 +1670,16 @@ function renderTrackList() {
     const art = cu
       ? `<img src="${cu}" alt="${escapeHtml(dn)}" onerror="this.parentElement.innerHTML='<div class=\\'track-art-placeholder\\' style=\\'background: ${getTrackColor(i)}\\'>${icon}</div>'">`
       : `<div class="track-art-placeholder" style="background: ${getTrackColor(i)};">${icon}</div>`;
-    const metaText = isYouTube ? (track.author || 'YouTube') : track.path;
+    let metaText;
+    if (isYouTube) metaText = (track.author || 'YouTube');
+    else if (isImmich) metaText = track.path;
+    else {
+      const dateStr = track.mtime ? new Date(track.mtime * 1000).toLocaleDateString() : '';
+      metaText = dateStr ? `${track.path} · ${dateStr}` : track.path;
+    }
     const actions = renderTrackActions(sp, track);
     return `
-    <div class="track-item" data-path="${sp}" data-idx="${i}" onclick="playTrack('${sp}')" oncontextmenu="event.preventDefault();event.stopPropagation();showTrackContextMenu(event,'${sp}')">
+    <div class="track-item" data-path="${sp}" data-idx="${i}" onclick="playTrack('${jsStr(sp)}')" oncontextmenu="event.preventDefault();event.stopPropagation();showTrackContextMenu(event,'${jsStr(sp)}')">
       <span class="track-number">${i + 1}</span>
       <div class="track-art">${art}</div>
       <div class="track-info">
@@ -1578,7 +1694,7 @@ function renderTrackList() {
 function renderTrackActions(sp, track) {
   const isImmich = track.type === 'immich';
   const isYouTube = track.type === 'youtube';
-  const queueBtn = `<button class="track-action-btn queue" onclick="event.stopPropagation(); addToQueue('${sp}')">⬇ Cola</button>`;
+  const queueBtn = `<button class="track-action-btn queue" onclick="event.stopPropagation(); addToQueue('${jsStr(sp)}')">⬇ Cola</button>`;
   let playlistBtn;
   if (currentPlaylistId) {
     if (isImmich) {
@@ -1586,10 +1702,10 @@ function renderTrackActions(sp, track) {
     } else if (isYouTube) {
       playlistBtn = `<button class="track-action-btn remove" onclick="event.stopPropagation(); removeYouTubeFromPlaylist(${currentPlaylistId}, '${track.videoId}')">✕ Quitar</button>`;
     } else {
-      playlistBtn = `<button class="track-action-btn remove" onclick="event.stopPropagation(); removeFromPlaylist(${currentPlaylistId}, '${sp}')">✕ Quitar</button>`;
+      playlistBtn = `<button class="track-action-btn remove" onclick="event.stopPropagation(); removeFromPlaylist(${currentPlaylistId}, '${jsStr(sp)}')">✕ Quitar</button>`;
     }
   } else {
-    playlistBtn = `<button class="track-action-btn" onclick="event.stopPropagation(); showAddMenu(event, '${sp}')">+ Añadir</button>`;
+    playlistBtn = `<button class="track-action-btn" onclick="event.stopPropagation(); showAddMenu(event, '${jsStr(sp)}')">+ Añadir</button>`;
   }
   return queueBtn + playlistBtn;
 }
@@ -1613,10 +1729,16 @@ function renderGridView() {
     const art = cu
       ? `<img src="${cu}" alt="${escapeHtml(dn)}" onerror="this.parentElement.innerHTML='<div class=\\'grid-art-placeholder\\' style=\\'background: ${getTrackColor(i)}\\'>${icon}</div>'">`
       : `<div class="grid-art-placeholder" style="background: ${getTrackColor(i)};">${icon}</div>`;
-    const metaText = isYouTube ? (track.author || 'YouTube') : track.path;
+    let metaText;
+    if (isYouTube) metaText = (track.author || 'YouTube');
+    else if (isImmich) metaText = track.path;
+    else {
+      const dateStr = track.mtime ? new Date(track.mtime * 1000).toLocaleDateString() : '';
+      metaText = dateStr ? `${track.path} · ${dateStr}` : track.path;
+    }
     return `
-    <div class="grid-item" data-path="${sp}" data-idx="${i}" onclick="playTrack('${sp}')" oncontextmenu="event.preventDefault();event.stopPropagation();showTrackContextMenu(event,'${sp}')">
-      <div class="grid-art">${art}<button class="grid-play-btn" onclick="event.stopPropagation(); playTrack('${sp}')">▶</button></div>
+    <div class="grid-item" data-path="${sp}" data-idx="${i}" onclick="playTrack('${jsStr(sp)}')" oncontextmenu="event.preventDefault();event.stopPropagation();showTrackContextMenu(event,'${jsStr(sp)}')">
+      <div class="grid-art">${art}<button class="grid-play-btn" onclick="event.stopPropagation(); playTrack('${jsStr(sp)}')">▶</button></div>
       <div class="grid-title">${escapeHtml(dn)}${isImmich || isYouTube || track.type === 'video' ? ' <span style="font-size:11px;color:var(--accent-pink)">🎬</span>' : ''}</div>
       <div class="grid-meta">${escapeHtml(metaText)}</div>
     </div>`;
@@ -1640,7 +1762,7 @@ function renderSidebar() {
         <div class="playlist-count">${p.songs.length} canciones</div>
       </div>
       <div class="playlist-actions">
-        <button class="playlist-action-btn" onclick="event.stopPropagation(); showRenameModal(${p.id}, '${safeName}')">✎</button>
+        <button class="playlist-action-btn" onclick="event.stopPropagation(); showRenameModal(${p.id}, '${jsStr(safeName)}')">✎</button>
         <button class="playlist-action-btn delete" onclick="event.stopPropagation(); deletePlaylist(${p.id})">✕</button>
       </div>
     </div>`;
@@ -1757,7 +1879,7 @@ function renderAddTrackList() {
     const dn = cleanName(track.name);
     const sp = encodeURIComponent(track.path);
     const sel = createSelectedSongs.includes(sp) ? ' selected' : '';
-    return `<div class="create-track-item${sel}" onclick="toggleCreateTrack('${sp}')">
+    return `<div class="create-track-item${sel}" onclick="toggleCreateTrack('${jsStr(sp)}')">
       <span class="create-track-icon">${icon(track)}</span>
       <span class="create-track-name">${escapeHtml(dn)}</span>
     </div>`;
@@ -1790,7 +1912,7 @@ function renderCreateSelected() {
     const dn = cleanName(track.name);
     return `<div class="create-selected-item">
       <span class="create-track-name">${escapeHtml(dn)}</span>
-      <button class="create-selected-remove" onclick="event.stopPropagation(); removeCreateTrack('${sp}')">✕</button>
+      <button class="create-selected-remove" onclick="event.stopPropagation(); removeCreateTrack('${jsStr(sp)}')">✕</button>
     </div>`;
   }).join('');
 }
@@ -1856,7 +1978,7 @@ function renderAddVisibleList() {
     const dn = cleanName(track.name);
     const sp = encodeURIComponent(track.path);
     const sel = window._addVisibleSongs.includes(sp) ? ' selected' : '';
-    return `<div class="create-track-item${sel}" onclick="toggleAddVisibleTrack('${sp}')">
+    return `<div class="create-track-item${sel}" onclick="toggleAddVisibleTrack('${jsStr(sp)}')">
       <span class="create-track-icon">${icon(track)}</span>
       <span class="create-track-name">${escapeHtml(dn)}</span>
     </div>`;
@@ -2043,7 +2165,7 @@ function renderImmichAssetList() {
   container.innerHTML = filtered.map(a => {
     const dn = (a.originalFileName || a.id).replace(/\.[^/.]+$/, '');
     const encodedId = encodeURIComponent(a.id);
-    return `<div class="create-track-item" onclick="addImmichToCurrentPlaylist('${encodedId}', '${escapeHtml(dn).replace(/'/g, "\\'")}')">
+    return `<div class="create-track-item" onclick="addImmichToCurrentPlaylist('${encodedId}', '${jsStr(dn)}')">
       <span class="create-track-icon">🎬</span>
       <span class="create-track-name">${escapeHtml(dn)}</span>
     </div>`;
@@ -2072,7 +2194,7 @@ function showAddMenu(event, songPath) {
     html += '<div class="submenu-item" style="color:var(--text-tertiary)">No hay playlists</div>';
   } else {
     playlists.forEach(p => {
-      html += `<div class="submenu-item" onclick="addToPlaylist(${p.id}, '${songPath}'); hideAddMenu();">${escapeHtml(p.name)}</div>`;
+      html += `<div class="submenu-item" onclick="addToPlaylist(${p.id}, '${jsStr(songPath)}'); hideAddMenu();">${escapeHtml(p.name)}</div>`;
     });
   }
   menu.innerHTML = html;
@@ -2107,21 +2229,21 @@ function showTrackContextMenu(event, sp) {
   const isImmich = track.type === 'immich';
 
   let html = `<div class="context-menu-title">${escapeHtml(dn)}</div>`;
-  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); playTrack('${sp}')">▶ Reproducir</div>`;
-  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); addToQueue('${sp}')">⬇ Agregar a la cola</div>`;
+  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); playTrack('${jsStr(sp)}')">▶ Reproducir</div>`;
+  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); addToQueue('${jsStr(sp)}')">⬇ Agregar a la cola</div>`;
 
   if (currentPlaylistId) {
     if (isImmich) {
       html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); removeImmichFromPlaylist(${currentPlaylistId}, '${track.assetId}')">✕ Quitar de playlist</div>`;
     } else {
-      html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); removeFromPlaylist(${currentPlaylistId}, '${sp}')">✕ Quitar de playlist</div>`;
+      html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); removeFromPlaylist(${currentPlaylistId}, '${jsStr(sp)}')">✕ Quitar de playlist</div>`;
     }
   } else {
-    html += `<div class="context-menu-item" onclick="hideTrackContextMenu(event); showAddMenu(event, '${sp}')">+ Añadir a playlist</div>`;
+    html += `<div class="context-menu-item" onclick="hideTrackContextMenu(event); showAddMenu(event, '${jsStr(sp)}')">+ Añadir a playlist</div>`;
   }
 
   html += `<div class="context-menu-divider"></div>`;
-  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); showTrackProperties(event, '${sp}')">ℹ Propiedades</div>`;
+  html += `<div class="context-menu-item" onclick="hideTrackContextMenu(); showTrackProperties(event, '${jsStr(sp)}')">ℹ Propiedades</div>`;
 
   menu.innerHTML = html;
   document.body.appendChild(menu);
@@ -2263,12 +2385,12 @@ function renderQueueContent() {
   let html = '<div class="queue-section-label">A continuación</div>';
   playQueue.forEach((q) => {
     const dn = cleanName(q.track.name);
-    html += `<div class="queue-item" onclick="playFromQueue('${q.path}')">
+    html += `<div class="queue-item" onclick="playFromQueue('${jsStr(q.path)}')">
       <div class="queue-item-info">
         <div class="queue-item-title">${escapeHtml(dn)}</div>
         <div class="queue-item-meta">${escapeHtml(q.track.path)}</div>
       </div>
-      <button class="queue-item-remove" onclick="event.stopPropagation(); removeFromQueue('${q.path}')" title="Quitar de la cola">✕</button>
+      <button class="queue-item-remove" onclick="event.stopPropagation(); removeFromQueue('${jsStr(q.path)}')" title="Quitar de la cola">✕</button>
     </div>`;
   });
   container.innerHTML = html;
@@ -2367,12 +2489,11 @@ function playTrackDirect(track) {
   video.oncanplay = () => {
     const vol = document.getElementById('volumeFill').style.width.replace('%', '') / 100 || 1;
     video.volume = vol;
-    video.play();
-    updatePlayPauseBtn(true);
+    video.play().then(() => updatePlayPauseBtn(true)).catch(() => updatePlayPauseBtn(false));
   };
   video.ontimeupdate = () => { onTimeUpdate(video); updateOverlay(video); };
   video.onended = () => {
-    if (repeatMode === 'one') { video.currentTime = 0; video.play(); }
+    if (repeatMode === 'one') { video.currentTime = 0; video.play().catch(() => updatePlayPauseBtn(false)); }
     else { playNextInSequence(); }
   };
   video.onwaiting = () => { updatePlayPauseBtn(false); };
@@ -2487,12 +2608,12 @@ function playTrack(encodedPath, autoQueue) {
     video.oncanplay = () => {
       const vol = document.getElementById('volumeFill').style.width.replace('%', '') / 100 || 1;
       video.volume = vol;
-      video.play();
+      video.play().catch(() => updatePlayPauseBtn(false));
       updatePlayPauseBtn(true);
     };
     video.ontimeupdate = () => { onTimeUpdate(video); updateOverlay(video); };
     video.onended = () => {
-      if (repeatMode === 'one') { video.currentTime = 0; video.play(); }
+      if (repeatMode === 'one') { video.currentTime = 0; video.play().catch(() => updatePlayPauseBtn(false)); }
       else { playNextInSequence(); }
     };
     video.onwaiting = () => { updatePlayPauseBtn(false); };
@@ -2512,12 +2633,12 @@ function playTrack(encodedPath, autoQueue) {
     audio.oncanplay = () => {
       const vol = document.getElementById('volumeFill').style.width.replace('%', '') / 100 || 1;
       audio.volume = vol;
-      audio.play();
+      audio.play().catch(() => updatePlayPauseBtn(false));
       updatePlayPauseBtn(true);
     };
     audio.ontimeupdate = () => { onTimeUpdate(audio); };
     audio.onended = () => {
-      if (repeatMode === 'one') { audio.currentTime = 0; audio.play(); }
+      if (repeatMode === 'one') { audio.currentTime = 0; audio.play().catch(() => updatePlayPauseBtn(false)); }
       else { playNextInSequence(); }
     };
   }
@@ -2710,8 +2831,7 @@ function togglePlayPause() {
   const el = isVideo ? video : audio;
   if (!el) return;
   if (el.paused) {
-    el.play();
-    updatePlayPauseBtn(true);
+    el.play().then(() => updatePlayPauseBtn(true)).catch(() => updatePlayPauseBtn(false));
   } else {
     el.pause();
     updatePlayPauseBtn(false);

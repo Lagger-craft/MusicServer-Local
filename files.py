@@ -49,7 +49,12 @@ def resolve_path(path):
 
 
 def is_safe_path(directory, path):
-    if not isinstance(path, str) or ".." in path:
+    if not isinstance(path, str):
+        return False
+    # Reject actual traversal segments ("."/"..") but allow them inside
+    # filenames, e.g. an ellipsis "..." or "Letra..". The realpath guard
+    # below still blocks genuine traversal like ../../etc/passwd.
+    if any(part in (".", "..") for part in path.split("/")):
         return False
     resolved = os.path.realpath(os.path.join(directory, path))
     allowed = os.path.realpath(directory)
@@ -151,7 +156,8 @@ def _refresh_file_list():
         for root, _, filenames in os.walk(base):
             for filename in filenames:
                 if any(filename.lower().endswith(ext) for ext in ALL_EXTENSIONS):
-                    rel_path = os.path.relpath(os.path.join(root, filename), base)
+                    abs_path = os.path.join(root, filename)
+                    rel_path = os.path.relpath(abs_path, base)
                     full_path = os.path.join(key, rel_path)
                     cover_name = os.path.splitext(filename)[0] + ".png"
                     cover_path = os.path.join(root, cover_name)
@@ -160,6 +166,7 @@ def _refresh_file_list():
                         "path": full_path,
                         "cover": os.path.join(key, cover_name) if os.path.exists(cover_path) else None,
                         "type": get_file_type(filename),
+                        "mtime": os.path.getmtime(abs_path),
                     })
     files.sort(key=lambda x: x["name"].lower())
     _list_cache.set(files)

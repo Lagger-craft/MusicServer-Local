@@ -5,7 +5,7 @@ services:
     ports:
       - "5000:5000"
     volumes:
-      - ./music:/music:ro
+      - /home/lagger/Music:/music:ro
       - ./config.json:/app/config.json
       - ./playlists.json:/app/playlists.json
       - ./.secret.key:/app/.secret.key

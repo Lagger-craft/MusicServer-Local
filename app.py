@@ -41,6 +41,7 @@ from immich import (
     handle_upload_compressed as immich_handle_upload_compressed,
     immich_api,
     immich_api_request,
+    immich_album_video_assets,
     proxy_immich,
 )
 from upload_queue import upload_queue
@@ -219,6 +220,11 @@ def health():
     return jsonify({"status": "ok"})
 
 
+@app.route("/favicon.ico")
+def favicon():
+    return Response(status=204)
+
+
 # ── Media serving ───────────────────────────────────────────
 
 @app.route("/media/<path:filename>")
@@ -384,6 +390,11 @@ def immich_album(album_id):
     data, err = immich_api("/albums/" + album_id)
     if err:
         return jsonify({"error": err}), 400
+    assets, err = immich_album_video_assets(album_id)
+    if err:
+        return jsonify({"error": err}), 400
+    if isinstance(data, dict):
+        data["assets"] = assets
     return jsonify(data)
 
 

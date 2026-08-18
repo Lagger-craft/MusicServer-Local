@@ -103,7 +103,11 @@ def encrypt_value(plaintext):
 def decrypt_value(ciphertext):
     if not ciphertext or not isinstance(ciphertext, str) or not ciphertext.startswith("__enc__"):
         return ciphertext
-    return _get_fernet().decrypt(ciphertext[7:].encode()).decode()
+    try:
+        return _get_fernet().decrypt(ciphertext[7:].encode()).decode()
+    except Exception as e:
+        logger.error("Failed to decrypt value: %s", e)
+        return ""
 
 
 def migrate_immich_key():

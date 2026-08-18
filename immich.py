@@ -84,6 +84,49 @@ def immich_api_request(method, path, data=None, files=None):
         return None, str(e)
 
 
+def immich_album_video_assets(album_id):
+    """Load all video assets in an album through Immich metadata search."""
+    assets = []
+    page = 1
+    page_size = 1000
+
+    while True:
+        result, err = immich_api_request(
+            "POST",
+            "/search/metadata",
+            data={
+                "albumIds": [album_id],
+                "type": "VIDEO",
+                "page": page,
+                "size": page_size,
+            },
+        )
+        if err:
+            return None, err
+
+        asset_results = result.get("assets", []) if isinstance(result, dict) else []
+        if isinstance(asset_results, dict):
+            # Current Immich returns SearchAssetResponseDto: {items, nextPage}.
+            batch = asset_results.get("items", [])
+        else:
+            # Keep compatibility with older responses that returned a list.
+            batch = asset_results
+        assets.extend(batch)
+        next_page = None
+        if isinstance(asset_results, dict):
+            next_page = asset_results.get("nextPage")
+        if next_page is None and isinstance(result, dict):
+            next_page = result.get("nextPage")
+        if not next_page:
+            break
+        try:
+            page = int(next_page)
+        except (TypeError, ValueError):
+            page += 1
+
+    return assets, None
+
+
 def proxy_immich(asset_id, endpoint):
     cfg = get_immich_config()
     if not cfg["url"] or not cfg["apiKey"]:
@@ -133,13 +176,19 @@ def handle_set_config(data):
     if not url or not api_key:
         return {"error": "URL y API key requeridas"}, 400
     try:
-        r = requests.get(url + "/api/albums", headers={"x-api-key": api_key}, timeout=10)
+        # Validate the credential itself instead of using an albums endpoint,
+        # whose response can depend on the Immich version and user permissions.
+        r = requests.get(url + "/api/api-keys/me", headers={"x-api-key": api_key}, timeout=10)
         if r.status_code == 401:
             return {"error": "API key inválida"}, 400
+        if r.status_code == 403:
+            return {"error": "La API key no tiene permiso para validarse en Immich"}, 400
         r.raise_for_status()
     except requests.ConnectionError:
         return {"error": "No se pudo conectar con Immich"}, 400
     except Exception as e:
+        logger.warning("Immich credential validation failed: status=%s url=%s error=%s",
+                       getattr(r, "status_code", "unknown"), url, e)
         return {"error": str(e)}, 400
     cfg = get_config()
     cfg["immich_url"] = url
