@@ -106,6 +106,48 @@
     <!-- Video Player Container -->
     <div class="video-container" id="playerContainer" style="display:none"></div>
 
+    <!-- Audio Fullscreen Container -->
+    <div class="audio-fullscreen" id="audioFullscreen" style="display:none">
+      <button class="audio-fullscreen-close" onclick="toggleFullscreen()" title="Salir de pantalla completa">✕</button>
+      <div class="audio-fullscreen-content">
+        <div class="audio-fullscreen-player">
+          <div class="audio-fullscreen-cover" id="audioFullscreenCover">
+            <div class="audio-fullscreen-cover-placeholder" style="background: linear-gradient(135deg, #8b5cf6, #ec4899);">♪</div>
+          </div>
+          <div class="audio-fullscreen-info">
+            <div class="audio-fullscreen-title" id="audioFullscreenTitle">No reproduciendo</div>
+            <div class="audio-fullscreen-artist" id="audioFullscreenArtist">Selecciona una canción</div>
+          </div>
+          <div class="audio-fullscreen-progress">
+            <span class="audio-fullscreen-time" id="audioFullscreenCurrentTime">0:00</span>
+            <div class="audio-fullscreen-progress-bar" id="audioFullscreenProgressBar" onclick="seekFullscreenTo(event)">
+              <div class="audio-fullscreen-progress-fill" id="audioFullscreenProgressFill"></div>
+            </div>
+            <span class="audio-fullscreen-time" id="audioFullscreenDuration">0:00</span>
+          </div>
+          <div class="audio-fullscreen-controls">
+            <button class="audio-fullscreen-control-btn" onclick="seekRelative(-10)" title="Retroceder 10s">⏪</button>
+            <button class="audio-fullscreen-control-btn" onclick="prevTrack()" title="Anterior">⏮</button>
+            <button class="audio-fullscreen-play-btn" id="audioFullscreenPlayPauseBtn" onclick="togglePlayPause()">▶</button>
+            <button class="audio-fullscreen-control-btn" onclick="nextTrack()" title="Siguiente">⏭</button>
+            <button class="audio-fullscreen-control-btn" onclick="seekRelative(10)" title="Adelantar 10s">⏩</button>
+          </div>
+          <div class="audio-fullscreen-volume">
+            <span class="audio-fullscreen-volume-icon" onclick="toggleMute()">🔊</span>
+            <div class="audio-fullscreen-volume-bar" id="audioFullscreenVolumeBar" onclick="setFullscreenVolume(event)">
+              <div class="audio-fullscreen-volume-fill" id="audioFullscreenVolumeFill"></div>
+            </div>
+          </div>
+        </div>
+        <div class="audio-fullscreen-lyrics" id="audioFullscreenLyrics">
+          <div class="audio-fullscreen-lyrics-header">
+            <h3>Letra</h3>
+          </div>
+          <div class="audio-fullscreen-lyrics-body" id="audioFullscreenLyricsBody"></div>
+        </div>
+      </div>
+    </div>
+
     <!-- Restore Bar -->
     <div class="restore-bar" id="restoreBar" style="display:none">
       <div class="restore-info">
