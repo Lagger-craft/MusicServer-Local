@@ -18,7 +18,7 @@ def get_config():
     if cached is not None:
         return cached
 
-    cfg = {"volume": 100, "shuffle": False, "repeat": "none"}
+    cfg = {"volume": 100, "shuffle": False, "repeat": "none", "metadataEnabled": True, "lyricsEnabled": True}
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE) as f:

@@ -6,9 +6,12 @@ services:
       - "5000:5000"
     volumes:
       - /home/lagger/Music:/music:ro
+      - ./lyrics:/lyrics:rw
       - ./config.json:/app/config.json
       - ./playlists.json:/app/playlists.json
       - ./.secret.key:/app/.secret.key
+    environment:
+      - LYRICS_DIR=/lyrics
     restart: unless-stopped
     healthcheck:
       test: python -c "import urllib.request; exit(0 if urllib.request.urlopen('http://localhost:5000/api/health').status == 200 else 1)"

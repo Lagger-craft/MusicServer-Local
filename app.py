@@ -34,6 +34,9 @@ from files import (
     serve_file_with_range,
     start_watcher,
 )
+from cache import PathCache
+from metadata import get_metadata
+from lyrics import get_lyrics, save_lyrics_file, get_sidecar_path
 from immich import (
     handle_get_config as immich_handle_get_config,
     handle_set_config as immich_handle_set_config,
@@ -255,6 +258,122 @@ def serve_cover(filename):
     return send_from_directory(d["path"], rel)
 
 
+# ── Track metadata ─────────────────────────────────────────
+
+metadata_cache = PathCache(ttl=24 * 3600, max_entries=500, name="metadata")
+
+
+@app.route("/api/metadata", methods=["GET"])
+@login_required
+@limit(30, 60)
+def get_metadata_api():
+    path = (request.args.get("path") or "").strip()
+    if not path:
+        return jsonify({"error": "Path requerido"}), 400
+
+    cfg = get_config()
+    if not cfg.get("metadataEnabled", True):
+        return jsonify({"error": "Metadata deshabilitada"}), 404
+
+    d, rel = resolve_path(path)
+    if not is_safe_path(d["path"], rel):
+        logger.warning("Blocked path traversal attempt in metadata: %s", path)
+        return jsonify({"error": "Acceso denegado: ruta inválida"}), 403
+
+    full_path = os.path.join(d["path"], rel)
+    if not os.path.isfile(full_path):
+        return jsonify({"error": "Arch. no encontrado"}), 404
+
+    cached = metadata_cache.get(path)
+    if cached is not None:
+        return jsonify(cached)
+
+    meta = get_metadata(path)
+    if meta is None:
+        return jsonify({"error": "Archivo no encontrado"}), 404
+
+    metadata_cache.set(path, meta)
+    return jsonify(meta)
+
+
+# ── Lyrics (LRCLIB proxy) ──────────────────────────────
+
+lyrics_cache = PathCache(ttl=7 * 24 * 3600, max_entries=500, name="lyrics")
+
+
+@app.route("/api/lyrics", methods=["GET"])
+@login_required
+@limit(30, 60)
+def get_lyrics_api():
+    path = (request.args.get("path") or "").strip()
+    if not path:
+        return jsonify({"error": "Path requerido"}), 400
+
+    cfg = get_config()
+    if not cfg.get("lyricsEnabled", True):
+        return jsonify({"error": "Lyrics deshabilitada"}), 404
+
+    d, rel = resolve_path(path)
+    if not is_safe_path(d["path"], rel):
+        logger.warning("Blocked path traversal attempt in lyrics: %s", path)
+        return jsonify({"error": "Acceso denegado: ruta inválida"}), 403
+
+    full_path = os.path.join(d["path"], rel)
+    if not os.path.isfile(full_path):
+        return jsonify({"error": "Archivo no encontrado"}), 404
+
+    cached = lyrics_cache.get(path)
+    if cached is not None:
+        return jsonify(cached)
+
+    # Reuse cached metadata when available to avoid re-reading tags.
+    meta = metadata_cache.get(path)
+    if meta is None:
+        meta = get_metadata(path)
+    if meta is None:
+        return jsonify({"error": "Archivo no encontrado"}), 404
+
+    result = get_lyrics(path, meta, audio_full_path=full_path)
+    lyrics_cache.set(path, result)
+    return jsonify(result)
+
+
+@app.route("/api/lyrics/save", methods=["POST"])
+@login_required
+@limit(10, 60)
+def save_lyrics_api():
+    data = request.get_json(silent=True) or {}
+    path = (data.get("path") or "").strip()
+    lyrics_text = data.get("lyrics") or ""
+    if not path:
+        return jsonify({"error": "Path requerido"}), 400
+
+    d, rel = resolve_path(path)
+    if not is_safe_path(d["path"], rel):
+        logger.warning("Blocked path traversal attempt in lyrics save: %s", path)
+        return jsonify({"error": "Acceso denegado: ruta inválida"}), 403
+
+    full_path = os.path.join(d["path"], rel)
+    if not os.path.isfile(full_path):
+        return jsonify({"error": "Archivo no encontrado"}), 404
+
+    try:
+        lrc_path = save_lyrics_file(full_path, lyrics_text)
+        logger.info("Saved lyrics to %s", lrc_path)
+    except OSError as e:
+        logger.error("Failed to save lyrics for %s: %s", path, e)
+        return jsonify({"error": f"Error al guardar letra: {str(e)}"}), 500
+    except Exception as e:
+        logger.error("Unexpected error saving lyrics for %s: %s", path, e, exc_info=True)
+        return jsonify({"error": f"Error inesperado: {str(e)}"}), 500
+
+    lyrics_cache.invalidate(path)
+
+    result = get_lyrics(path, None, audio_full_path=full_path)
+    lyrics_cache.set(path, result)
+    return jsonify(result)
+
+
 # ── File listing ────────────────────────────────────────────
 
 @app.route("/api/folders", methods=["GET"])
@@ -305,6 +424,12 @@ def set_config_api():
         config["shuffle"] = bool(data["shuffle"])
     if "repeat" in data:
         config["repeat"] = data.get("repeat", "none")
+
+    if "metadataEnabled" in data:
+        config["metadataEnabled"] = bool(data["metadataEnabled"])
+
+    if "lyricsEnabled" in data:
+        config["lyricsEnabled"] = bool(data["lyricsEnabled"])
 
     if "music_dirs" in data:
         new_dirs = []

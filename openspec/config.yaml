@@ -1,0 +1,31 @@
+schema: spec-driven
+
+context: |
+  Tech stack: Python 3 + Flask >=3.0 (modular: app.py + auth/cache/config/files/immich/invidious/playlists/ratelimit/upload_queue helpers), vanilla JS/CSS/HTML frontend, Docker + docker-compose (music-server + Invidious + PostgreSQL), Gunicorn WSGI.
+  Data: runtime config.json + playlists.json on disk; .secret.key for cryptography.
+  Architecture: Flask monolith, single templates/index.html SPA-like client; media served via /media/<path>; Immich proxied via /api/immich/media.
+  Testing: NONE — no test runner or suite exists; changes verified manually by running the server.
+  Style: English code/comments; Spanish only in AGENTS.md docs.
+
+rules:
+  proposal:
+    - Include rollback plan for risky changes
+  specs:
+    - Use Given/When/Then for scenarios
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
+  design:
+    - Document architecture decisions with rationale
+  tasks:
+    - Group by phase, use hierarchical numbering
+    - Keep tasks completable in one session
+  apply:
+    guidelines:
+      - Follow existing code patterns (Flask routes registered in app.py)
+    tdd: false
+    test_command: ""
+  verify:
+    test_command: ""
+    build_command: "python -c 'import app'"
+    coverage_threshold: 0
+  archive:
+    - Warn before merging destructive deltas

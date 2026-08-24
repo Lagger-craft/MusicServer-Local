@@ -218,6 +218,257 @@ function getCoverUrl(track) {
   return null;
 }
 
+/* ==================== METADATA ==================== */
+// Last fetched metadata, consumed by the queue card (rendered in PR3).
+let currentMeta = null;
+
+async function fetchMetadata(path) {
+  try {
+    const resp = await fetch(`${API_BASE}/metadata?path=${encodeURIComponent(path)}`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (!data || data.error) return;
+    currentMeta = data;
+    const track = allTracks.find(t => t.path === path);
+    if (track) track.meta = data;
+    const titleEl = document.getElementById('nowPlayingTitle');
+    const artistEl = document.getElementById('nowPlayingArtist');
+    if (titleEl && data.title) titleEl.textContent = data.title;
+    if (artistEl && data.artist) artistEl.textContent = data.artist;
+  } catch (e) {
+    // Metadata is best-effort; ignore network/parse errors.
+  }
+}
+
+/* ==================== LYRICS (PR4) ==================== */
+// Last fetched lyrics for the current track (rendered by the lyrics panel).
+let currentLyrics = null;
+// Prefixed media path of the track currently loaded in the player.
+let currentTrackPath = null;
+// Parsed synced-LRC lines for the active track: [{ t: seconds, text }].
+let lyricLines = [];
+// Index of the currently highlighted synced line (-1 = none).
+let activeLyricIndex = -1;
+
+async function fetchLyrics(path, meta) {
+  if (!path) return;
+  try {
+    const resp = await fetch(`${API_BASE}/lyrics?path=${encodeURIComponent(path)}`);
+    if (!resp.ok) { currentLyrics = null; return; }
+    const data = await resp.json();
+    if (!data || data.error) { currentLyrics = null; return; }
+    currentLyrics = data;
+    if (isLyricsOpen()) renderLyrics();
+  } catch (e) {
+    currentLyrics = null;
+  }
+}
+
+// Parse an LRC string into time-ordered [{ t: seconds, text }] entries.
+// A single line may carry multiple timestamps; each becomes its own entry.
+function parseLRC(synced) {
+  const out = [];
+  const re = /\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
+  for (const line of synced.split('\n')) {
+    re.lastIndex = 0;
+    const stamps = [];
+    let m;
+    let lastEnd = 0;
+    while ((m = re.exec(line)) !== null) {
+      const min = parseInt(m[1], 10);
+      const sec = parseInt(m[2], 10);
+      const frac = m[3] ? parseInt(m[3], 10) / Math.pow(10, m[3].length) : 0;
+      stamps.push(min * 60 + sec + frac);
+      lastEnd = re.lastIndex;
+    }
+    const text = line.slice(lastEnd).trim();
+    for (const t of stamps) out.push({ t, text });
+  }
+  out.sort((a, b) => a.t - b.t);
+  return out;
+}
+
+function isLyricsOpen() {
+  return !!document.getElementById('lyricsOverlay');
+}
+
+// Triggered by the player-bar lyrics button (PR2 wired; panel built in PR4).
+function toggleLyrics() {
+  if (isLyricsOpen()) { closeLyrics(); return; }
+  if (!currentTrackPath) return;
+  openLyrics();
+}
+
+function openLyrics() {
+  if (isLyricsOpen()) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'lyrics-overlay';
+  overlay.id = 'lyricsOverlay';
+  overlay.onclick = function (e) { if (e.target === this) closeLyrics(); };
+  overlay.innerHTML = `
+    <div class="lyrics-drawer">
+      <div class="lyrics-header">
+        <h3>Letra</h3>
+        <button class="lyrics-close-btn" onclick="closeLyrics()" title="Cerrar">✕</button>
+      </div>
+      <div class="lyrics-body" id="lyricsBody"></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const btn = document.getElementById('lyricsBtn');
+  if (btn) btn.classList.add('active');
+  if (currentLyrics) renderLyrics();
+  else fetchLyrics(currentTrackPath, currentMeta);
+}
+
+function closeLyrics() {
+  const overlay = document.getElementById('lyricsOverlay');
+  if (overlay) overlay.remove();
+  const btn = document.getElementById('lyricsBtn');
+  if (btn) btn.classList.remove('active');
+  activeLyricIndex = -1;
+}
+
+// Render the lyrics panel body from the current track's lyrics payload.
+function renderLyrics() {
+  const body = document.getElementById('lyricsBody');
+  if (!body) return;
+  if (!currentLyrics) {
+    body.innerHTML = '<div class="lyrics-empty">Cargando letra…</div>';
+    return;
+  }
+  if (currentLyrics.instrumental) {
+    body.innerHTML = '<div class="lyrics-instrumental"><span class="lyrics-instrumental-icon">🎵</span>Esta canción es instrumental</div>';
+    return;
+  }
+  const synced = currentLyrics.syncedLyrics;
+  if (synced && synced.trim()) {
+    lyricLines = parseLRC(synced);
+    body.innerHTML = `<div class="lyrics-toolbar"><button class="lyrics-edit-btn" onclick="openLyricsEditor()" title="Editar letra">✏️</button></div>` +
+      lyricLines.map((l, i) =>
+        `<div class="lyrics-line" data-index="${i}" data-time="${l.t}" onclick="seekToLyric(${i})">${l.text ? escapeHtml(l.text) : '&nbsp;'}</div>`
+      ).join('');
+    activeLyricIndex = -1;
+    updateLyricsHighlight(audio && audio.currentTime ? audio.currentTime : 0);
+    return;
+  }
+  const plain = currentLyrics.plainLyrics;
+  if (plain && plain.trim()) {
+    lyricLines = [];
+    body.innerHTML = `<div class="lyrics-toolbar"><button class="lyrics-edit-btn" onclick="openLyricsEditor()" title="Editar letra">✏️</button></div>` +
+      plain.split('\n').map(t =>
+        `<div class="lyrics-line">${t.trim() ? escapeHtml(t) : '&nbsp;'}</div>`
+      ).join('');
+    return;
+  }
+  body.innerHTML = `<div class="lyrics-empty">Sin letra disponible</div><div class="lyrics-empty"><button class="lyrics-add-btn" onclick="openLyricsEditor()">Agregar letra</button></div>`;
+}
+
+// Click a synced line to seek the player to that timestamp.
+function seekToLyric(i) {
+  if (!lyricLines[i]) return;
+  const t = lyricLines[i].t;
+  if (audio && audio.duration) {
+    audio.currentTime = t;
+    if (audio.paused) audio.play().catch(() => {});
+  }
+}
+
+// Highlight the synced line active at `time`, scrolling it into view.
+function updateLyricsHighlight(time) {
+  if (!lyricLines.length) return;
+  let idx = -1;
+  for (let i = 0; i < lyricLines.length; i++) {
+    if (lyricLines[i].t <= time) idx = i; else break;
+  }
+  if (idx === activeLyricIndex) return;
+  const body = document.getElementById('lyricsBody');
+  if (!body) { activeLyricIndex = idx; return; }
+  const prev = body.querySelector('.lyrics-line.active');
+  if (prev) prev.classList.remove('active');
+  if (idx >= 0) {
+    const el = body.querySelector(`.lyrics-line[data-index="${idx}"]`);
+    if (el) {
+      el.classList.add('active');
+      const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      el.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'center' });
+    }
+  }
+  activeLyricIndex = idx;
+}
+
+function openLyricsEditor() {
+  const body = document.getElementById('lyricsBody');
+  if (!body || !currentTrackPath) return;
+  const existing = (currentLyrics && (currentLyrics.syncedLyrics || currentLyrics.plainLyrics)) || '';
+  body.innerHTML = `
+    <div class="lyrics-editor">
+      <textarea class="lyrics-textarea" placeholder="Pegá la letra acá…&#10;&#10;Para letra sincronizada usá formato LRC:&#10;[00:12.50] Primera línea&#10;[00:15.30] Segunda línea">${escapeHtml(existing)}</textarea>
+      <div class="lyrics-editor-actions">
+        <button class="lyrics-editor-cancel" onclick="cancelLyricsEditor()">Cancelar</button>
+        <button class="lyrics-editor-save" onclick="saveLyricsEditor()">Guardar</button>
+      </div>
+    </div>`;
+  body.querySelector('.lyrics-textarea').focus();
+}
+
+function cancelLyricsEditor() {
+  renderLyrics();
+}
+
+async function saveLyricsEditor() {
+  const textarea = document.querySelector('.lyrics-textarea');
+  if (!textarea || !currentTrackPath) return;
+  const btn = document.querySelector('.lyrics-editor-save');
+  if (btn) { btn.disabled = true; btn.textContent = 'Guardando…'; }
+  try {
+    const resp = await fetch(`${API_BASE}/lyrics/save`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({path: currentTrackPath, lyrics: textarea.value}),
+    });
+    
+    // Leer el body una sola vez
+    const data = await resp.json();
+    
+    if (!resp.ok) {
+      throw new Error(data.error || `HTTP ${resp.status}`);
+    }
+    
+    currentLyrics = data;
+    renderLyrics();
+    showToast('Letra guardada', 'success');
+  } catch (e) {
+    console.error('Error saving lyrics:', e);
+    showToast(`Error al guardar: ${e.message}`, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Guardar'; }
+  }
+}
+
+/* ==================== QUEUE HISTORY (PR3) ==================== */
+// In-memory "recently played" list (YouTube Music style). Session-only: it is
+// NEVER written to localStorage, so it resets to empty on every page reload
+// (spec R: History Isolation).
+let playHistory = [];
+const MAX_HISTORY = 50;
+// The track object currently loaded in the player (local audio/video or Immich).
+let currentTrack = null;
+
+function pushHistory(track) {
+  if (!track) return;
+  // Skip consecutive duplicates (e.g. restarting the same track).
+  if (playHistory[0] === track) return;
+  playHistory.unshift(track);
+  if (playHistory.length > MAX_HISTORY) playHistory.length = MAX_HISTORY;
+}
+
+// Record a playback switch: push the outgoing track into history, adopt the new one.
+function recordTrackSwitch(newTrack) {
+  if (currentTrack && currentTrack !== newTrack && currentTrack.type !== 'youtube') {
+    pushHistory(currentTrack);
+  }
+  currentTrack = newTrack;
+}
+
 /* ==================== THEME ==================== */
 function initTheme() {
   const saved = localStorage.getItem('theme') || 'light';
@@ -1412,11 +1663,15 @@ function showYouTubeIframe(videoId, title) {
   `;
   overlay.appendChild(container);
   document.body.appendChild(overlay);
+  // PR3: keep the queue "current card" in sync with YouTube playback.
+  recordTrackSwitch({ type: 'youtube', videoId, name: title });
   youtubePlaying = { videoId, title };
 }
 
 function playYouTubeDirect(videoId, streamUrl, title) {
   stopPlayback();
+  // PR3: keep the queue "current card" in sync with YouTube playback.
+  recordTrackSwitch({ type: 'youtube', videoId, name: title });
   nowPlayingImmichId = null;
   isVideo = true;
   const player = document.getElementById('playerContainer');
@@ -2378,21 +2633,47 @@ function playFromQueue(encodedPath) {
 function renderQueueContent() {
   const container = document.getElementById('queueContent');
   if (!container) return;
+
+  let html = '';
+
+  // Próximo — upcoming tracks still in the queue.
+  html += '<div class="queue-section-label">Próximo</div>';
   if (playQueue.length === 0) {
-    container.innerHTML = `<div class="queue-empty"><div class="queue-empty-icon">🎶</div><div class="queue-empty-text">No hay canciones en cola</div></div>`;
-    return;
+    html += '<div class="queue-section-empty">No hay canciones en cola</div>';
+  } else {
+    playQueue.forEach((q) => {
+      const t = q.track;
+      const cover = getTrackCover(t);
+      const title = getTrackTitle(t);
+      const artist = getTrackArtist(t);
+      html += `<div class="queue-item" onclick="playFromQueue('${jsStr(q.path)}')">
+        <div class="queue-item-thumb${cover ? '' : ' queue-item-thumb-ph'}"${cover ? ` style="background-image:url('${cover}')"` : ''}>${cover ? '' : '<span>♪</span>'}</div>
+        <div class="queue-item-info">
+          <div class="queue-item-title">${escapeHtml(title)}</div>
+          <div class="queue-item-meta">${escapeHtml(artist)}</div>
+        </div>
+        <button class="queue-item-remove" onclick="event.stopPropagation(); removeFromQueue('${jsStr(q.path)}')" title="Quitar de la cola">✕</button>
+      </div>`;
+    });
   }
-  let html = '<div class="queue-section-label">A continuación</div>';
-  playQueue.forEach((q) => {
-    const dn = cleanName(q.track.name);
-    html += `<div class="queue-item" onclick="playFromQueue('${jsStr(q.path)}')">
-      <div class="queue-item-info">
-        <div class="queue-item-title">${escapeHtml(dn)}</div>
-        <div class="queue-item-meta">${escapeHtml(q.track.path)}</div>
-      </div>
-      <button class="queue-item-remove" onclick="event.stopPropagation(); removeFromQueue('${jsStr(q.path)}')" title="Quitar de la cola">✕</button>
-    </div>`;
-  });
+
+  // Historial — recently played this session (never persisted, see pushHistory).
+  if (playHistory.length > 0) {
+    html += '<div class="queue-section-label">Historial</div>';
+    playHistory.forEach((t) => {
+      const cover = getTrackCover(t);
+      const title = getTrackTitle(t);
+      const artist = getTrackArtist(t);
+      html += `<div class="queue-item queue-item-history">
+        <div class="queue-item-thumb${cover ? '' : ' queue-item-thumb-ph'}"${cover ? ` style="background-image:url('${cover}')"` : ''}>${cover ? '' : '<span>♪</span>'}</div>
+        <div class="queue-item-info">
+          <div class="queue-item-title">${escapeHtml(title)}</div>
+          <div class="queue-item-meta">${escapeHtml(artist)}</div>
+        </div>
+      </div>`;
+    });
+  }
+
   container.innerHTML = html;
 }
 
@@ -2409,6 +2690,48 @@ function isQueueOpen() {
   return !!document.getElementById('queueOverlay');
 }
 
+/* ==================== QUEUE DRAWER (PR3, YouTube Music style) ==================== */
+
+// Resolve a cover URL for any track-like object (local uses the boolean `cover`
+// flag; Immich uses its thumbnail endpoint). Returns null when there is none.
+function getTrackCover(track) {
+  if (!track) return null;
+  if (track.type === 'immich') return `${API_BASE}/immich/thumbnail/${track.assetId}`;
+  return getCoverUrl(track);
+}
+
+function getTrackTitle(track) {
+  if (!track) return '';
+  if (track.meta && track.meta.title) return track.meta.title;
+  return cleanName(track.name);
+}
+
+function getTrackArtist(track) {
+  if (!track) return '';
+  if (track.meta && track.meta.artist) return track.meta.artist;
+  if (track.type === 'immich') return 'Immich';
+  if (track.path) return cleanName(track.path);
+  return '';
+}
+
+function renderQueueCurrentCard() {
+  const el = document.getElementById('queueCurrentCard');
+  if (!el) return;
+  const cover = getTrackCover(currentTrack);
+  const title = getTrackTitle(currentTrack);
+  const artist = getTrackArtist(currentTrack);
+  if (!title && !cover) { el.innerHTML = ''; return; }
+  el.innerHTML = `
+    <div class="queue-current-cover${cover ? '' : ' queue-current-cover-ph'}"${cover ? ` style="background-image:url('${cover}')"` : ''}>
+      ${cover ? '' : '<span>♪</span>'}
+    </div>
+    <div class="queue-current-info">
+      <div class="queue-current-label">Reproduciendo ahora</div>
+      <div class="queue-current-title">${escapeHtml(title)}</div>
+      <div class="queue-current-artist">${escapeHtml(artist)}</div>
+    </div>`;
+}
+
 function renderQueueDrawer() {
   let overlay = document.getElementById('queueOverlay');
   if (overlay) overlay.remove();
@@ -2418,27 +2741,33 @@ function renderQueueDrawer() {
   overlay.id = 'queueOverlay';
   overlay.onclick = function (e) { if (e.target === this) this.remove(); };
 
+  const cover = getTrackCover(currentTrack);
   const drawer = document.createElement('div');
   drawer.className = 'queue-drawer';
   drawer.onclick = function (e) { e.stopPropagation(); };
 
   drawer.innerHTML = `
+    <div class="queue-backdrop"${cover ? ` style="background-image:url('${cover}')"` : ''}></div>
     <div class="queue-header">
       <h3>Cola de reproducción</h3>
       <button class="queue-clear-btn" onclick="clearQueue()">Limpiar</button>
       <button class="queue-close-btn" onclick="toggleQueue()">✕</button>
     </div>
+    <div class="queue-current-card" id="queueCurrentCard"></div>
     <div class="queue-content" id="queueContent"></div>
   `;
 
   overlay.appendChild(drawer);
   document.body.appendChild(overlay);
+  renderQueueCurrentCard();
   renderQueueContent();
 }
 
 /* ==================== IMMICH PLAYBACK ==================== */
 function playTrackDirect(track) {
   if (!track) return;
+  // PR3: record the switch so the previous track lands in session history.
+  recordTrackSwitch(track);
   const encodedPath = track.type === 'immich' ? track.path : encodeURIComponent(track.path);
 
   stopPlayback();
@@ -2511,6 +2840,9 @@ function playTrackDirect(track) {
     : `<div class="now-playing-art-placeholder" style="background:var(--gradient-accent);">🎬</div>`;
   document.getElementById('nowPlayingTitle').textContent = cleanName(track.name);
   document.getElementById('nowPlayingArtist').textContent = track.path;
+
+  // PR3: refresh the queue drawer (current card + history) if it is open.
+  if (isQueueOpen()) { renderQueueCurrentCard(); renderQueueContent(); }
 }
 
 function playTrackFromQueue(q) {
@@ -2546,6 +2878,9 @@ function playTrack(encodedPath, autoQueue) {
     playYouTubeVideo(track.videoId, cleanName(track.name));
     return;
   }
+
+  // PR3: record the switch so the previous track lands in session history.
+  recordTrackSwitch(track);
 
   if (autoQueue !== false) {
     const visible = getVisibleTracks();
@@ -2659,6 +2994,17 @@ function playTrack(encodedPath, autoQueue) {
 
   document.getElementById('nowPlayingTitle').textContent = cleanName(track.name);
   document.getElementById('nowPlayingArtist').textContent = track.path;
+
+  // Lazy metadata: tags override filename-derived title/artist when present.
+  fetchMetadata(track.path);
+
+  // Track the loaded path so the lyrics button can fetch on demand, and also
+  // prefetch lyrics on play (best-effort, panel rendered in PR4).
+  currentTrackPath = track.path;
+  fetchLyrics(track.path, currentMeta);
+
+  // PR3: refresh the queue drawer (current card + history) if it is open.
+  if (isQueueOpen()) { renderQueueCurrentCard(); renderQueueContent(); }
 }
 
 /* ==================== VIDEO OVERLAY ==================== */
@@ -2932,6 +3278,7 @@ function onTimeUpdate(el) {
   document.getElementById('currentTime').textContent = formatTime(el.currentTime);
   document.getElementById('duration').textContent = formatTime(el.duration);
   savePositionThrottled(el.currentTime);
+  updateLyricsHighlight(el.currentTime);
 }
 
 function persistTrack(encodedPath) {

@@ -9,6 +9,7 @@ __pycache__/
 
 # User media
 music/
+lyrics/
 
 # Encryption key for sensitive config values
 .secret.key
