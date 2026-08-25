@@ -173,10 +173,26 @@ function showUserBadge() {
   badge.innerHTML = `<span class="auth-username">${escapeHtml(currentUser)}</span><button class="auth-logout-btn" onclick="doLogout()">Salir</button>`;
 }
 
-/* Intercept fetch to handle 401 */
+/* Intercept fetch to handle 401 and inject CSRF token */
+let _csrfToken = '';
 const _originalFetch = window.fetch;
 window.fetch = async function(...args) {
+  // Inject CSRF header into state-changing requests
+  if (_csrfToken && args[1] && typeof args[1] === 'object') {
+    const method = (args[1].method || '').toUpperCase();
+    if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(method)) {
+      args[1].headers = args[1].headers || {};
+      if (args[1].headers instanceof Headers) {
+        args[1].headers.set('X-CSRF-Token', _csrfToken);
+      } else {
+        args[1].headers['X-CSRF-Token'] = _csrfToken;
+      }
+    }
+  }
   const res = await _originalFetch.apply(this, args);
+  // Capture CSRF token from any response that carries it
+  const serverToken = res.headers.get('X-CSRF-Token');
+  if (serverToken) _csrfToken = serverToken;
   if (res.status === 401 && currentUser) {
     currentUser = null;
     showLoginModal();
@@ -540,7 +556,7 @@ function applyTheme(themeId) {
   root.style.setProperty('--bg-queue-item-hover', selected.colors['bg-hover']);
   root.style.setProperty('--bg-panel', selected.colors['bg-modal'] + 'dd');
   root.style.setProperty('--queue-scrim', `linear-gradient(180deg, ${selected.colors['bg-primary']}88, ${selected.colors['bg-primary']}dd)`);
-  root.style.setProperty('--queue-filter', 'blur(40px) brightness(.75) saturate(1.05)');
+  root.style.setProperty('--queue-filter', 'blur(12px) brightness(.88) saturate(1.02)');
   root.style.setProperty('--gradient-accent', `linear-gradient(135deg, ${selected.colors['accent-primary']}, ${selected.colors['accent-pink']})`);
   root.style.setProperty('--shadow-sm', `0 2px 8px ${selected.colors['accent-primary']}22`);
   root.style.setProperty('--shadow-md', `0 4px 16px ${selected.colors['accent-primary']}30`);
@@ -1102,6 +1118,18 @@ function showToast(msg, duration) {
     el.classList.add('toast-out');
     el.addEventListener('animationend', () => el.remove());
   }, duration);
+}
+
+function handleMediaError(mediaEl, filename) {
+  const err = mediaEl.error;
+  const ext = filename ? filename.replace(/^.*(\.\w+)$/, '$1').toLowerCase() : '';
+  if (err && err.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
+    showToast(`Formato no soportado por el navegador: ${ext || 'desconocido'}`, 4000);
+    document.getElementById('nowPlayingTitle').textContent = `Formato no soportado: ${ext}`;
+  } else {
+    showToast('Error al reproducir', 3000);
+    document.getElementById('nowPlayingTitle').textContent = 'Error al reproducir';
+  }
 }
 
 function showImmichContextMenu(event, encodedId, name) {
@@ -2973,10 +3001,7 @@ function playTrackDirect(track) {
   fsBtn.style.display = 'inline-block';
   document.getElementById('videoOverlay').classList.add('hidden');
 
-  video.onerror = (e) => {
-    console.error('Video error:', video.error ? video.error.message : 'unknown', video.networkState);
-    document.getElementById('nowPlayingTitle').textContent = 'Error al reproducir: ' + (video.error ? video.error.message : 'desconocido');
-  };
+  video.onerror = () => { handleMediaError(video, track.name); };
   video.oncanplay = () => {
     const vol = document.getElementById('volumeFill').style.width.replace('%', '') / 100 || 1;
     video.volume = vol;
@@ -3101,7 +3126,7 @@ function playTrack(encodedPath, autoQueue) {
     fsBtn.style.display = 'inline-block';
     document.getElementById('videoOverlay').classList.add('hidden');
 
-    video.onerror = () => { document.getElementById('nowPlayingTitle').textContent = 'Error al reproducir'; };
+    video.onerror = () => { handleMediaError(video, track.name); };
     video.oncanplay = () => {
       const vol = document.getElementById('volumeFill').style.width.replace('%', '') / 100 || 1;
       video.volume = vol;
@@ -3126,7 +3151,7 @@ function playTrack(encodedPath, autoQueue) {
     audio.src = `/media/${encodedPath}`;
     audio.load();
 
-    audio.onerror = () => { document.getElementById('nowPlayingTitle').textContent = 'Error al reproducir'; };
+    audio.onerror = () => { handleMediaError(audio, track.name); };
     audio.oncanplay = () => {
       const vol = document.getElementById('volumeFill').style.width.replace('%', '') / 100 || 1;
       audio.volume = vol;

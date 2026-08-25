@@ -4,6 +4,19 @@ import os
 import secrets
 from logging.handlers import RotatingFileHandler
 
+# ── Restricted System Paths ────────────────────────────────────
+# Block access to these OS-critical areas to prevent an exposed 
+# server from letting a user list system files.
+_RESTRICTED_PATH_PREFIXES = (
+    "/etc", "/proc", "/sys", "/dev", "/boot", "/bin", "/sbin",
+    "/lib", "/usr", "/var", "/root", "/run", "/snap",
+)
+
+def _is_restricted_path(dir_path: str) -> bool:
+    """Return True if ``dir_path`` resolves to a restricted system area."""
+    real = os.path.realpath(dir_path)
+    return any(real.startswith(prefix) for prefix in _RESTRICTED_PATH_PREFIXES)
+
 import requests
 from flask import Flask, jsonify, render_template, request, Response, send_from_directory, session
 
@@ -106,6 +119,7 @@ upload_queue.start()
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE", "0") == "1",
     PERMANENT_SESSION_LIFETIME=86400 * 30,
 )
 
@@ -124,7 +138,44 @@ def set_security_headers(response):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "SAMEORIGIN"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    # Expose CSRF token so the frontend can read it
+    csrf_token = session.get("_csrf_token")
+    if csrf_token:
+        response.headers["X-CSRF-Token"] = csrf_token
     return response
+
+
+# ── CSRF protection ────────────────────────────────────────
+
+def _get_or_create_csrf_token():
+    if "_csrf_token" not in session:
+        session["_csrf_token"] = secrets.token_hex(32)
+    return session["_csrf_token"]
+
+
+# Endpoints that are safe (read-only) or handle their own auth
+_CSRF_EXEMPT_ENDPOINTS = {
+    "auth_status",       # GET-only, used for login flow
+    "auth_login",        # protected by rate limiting + credentials
+    "auth_register",     # protected by is_first_run() gate
+    "health",            # GET-only
+    "favicon",           # GET-only
+    "index",             # GET-only
+    "static",            # GET-only
+}
+
+
+@app.before_request
+def csrf_protect():
+    if request.method in ("GET", "HEAD", "OPTIONS"):
+        return
+    endpoint = request.endpoint or ""
+    if endpoint in _CSRF_EXEMPT_ENDPOINTS:
+        return
+    token = session.get("_csrf_token")
+    header_token = request.headers.get("X-CSRF-Token", "")
+    if not token or header_token != token:
+        return jsonify({"error": "CSRF token inválido"}), 403
 
 
 # ── Auth routes ─────────────────────────────────────────────
@@ -132,6 +183,7 @@ def set_security_headers(response):
 @app.route("/api/auth/status")
 def auth_status():
     if "user" in session:
+        _get_or_create_csrf_token()
         return jsonify({"authenticated": True, "user": session["user"]})
     return jsonify({"authenticated": False, "first_run": is_first_run()})
 
@@ -153,6 +205,7 @@ def auth_register():
         return jsonify({"error": err}), 400
     session["user"] = username
     session.permanent = True
+    _get_or_create_csrf_token()
     return jsonify({"status": "ok", "user": username})
 
 
@@ -167,6 +220,7 @@ def auth_login():
     if verify_user(username, password):
         session["user"] = username
         session.permanent = True
+        _get_or_create_csrf_token()
         logger.info("User logged in: %s", username)
         return jsonify({"status": "ok", "user": username})
     logger.warning("Failed login attempt for: %s", username)
@@ -435,8 +489,13 @@ def set_config_api():
         new_dirs = []
         for entry in data["music_dirs"]:
             p = os.path.expanduser(entry.get("path", ""))
-            if os.path.isdir(p):
-                new_dirs.append({"key": entry.get("key", "main"), "path": os.path.abspath(p)})
+            real_p = os.path.realpath(p)
+            # SECURITY: Block system directories from being added as music dirs.
+            if _is_restricted_path(p):
+                return jsonify({"error": f"No permitido: {real_p} es un directorio del sistema"}), 403
+            if not os.path.isdir(real_p):
+                continue
+            new_dirs.append({"key": entry.get("key", "main"), "path": real_p})
         if new_dirs:
             config["music_dirs"] = new_dirs
             changed_dir = True
@@ -445,8 +504,11 @@ def set_config_api():
 
     if "music_dir" in data and "music_dirs" not in data:
         new_dir = os.path.expanduser(data["music_dir"])
-        if os.path.isdir(new_dir):
-            config["music_dirs"] = [{"key": "main", "path": os.path.abspath(new_dir)}]
+        real_dir = os.path.realpath(new_dir)
+        if _is_restricted_path(real_dir):
+            return jsonify({"error": f"No permitido: {real_dir} es un directorio del sistema"}), 403
+        if os.path.isdir(real_dir):
+            config["music_dirs"] = [{"key": "main", "path": real_dir}]
             changed_dir = True
         else:
             return jsonify({"error": "La carpeta no existe"}), 400
@@ -1033,6 +1095,20 @@ def remove_song_from_playlist(pid):
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
-    logger.info("Server starting on port %d (debug=%s)", port, debug)
-    app.run(host="0.0.0.0", port=port, debug=debug)
+    host = os.environ.get("HOST", "0.0.0.0")
+
+    # SECURITY FIX: Force debug off when serving on a public interface
+    # to prevent Werkzeug debugger RCE (Remote Code Execution).
+    flask_debug_env = os.environ.get("FLASK_DEBUG", "").strip().lower()
+    is_public_host = host not in ("127.0.0.1", "localhost")
+
+    debug = (flask_debug_env == "1")
+    if is_public_host and debug:
+        debug = False
+        logger.warning(
+            "Debug mode forced OFF: FLASK_DEBUG=1 but HOST=%s is public. Set HOST=127.0.0.1 to enable.",
+            host,
+        )
+
+    logger.info("Server starting on %s:%d (debug=%s)", host, port, debug)
+    app.run(host=host, port=port, debug=debug)
