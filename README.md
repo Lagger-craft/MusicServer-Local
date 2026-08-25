@@ -5,6 +5,12 @@ Reproductor de música, video y YouTube con interfaz web. Soporta archivos local
 ## Docker (recomendado)
 
 ```bash
+# 1. Crear archivo .env con las credenciales
+cp .env.example .env
+# Editar .env y generar keys nuevas:
+#   openssl rand -hex 16
+
+# 2. Levantar servicios
 docker compose up -d
 ```
 
@@ -41,8 +47,8 @@ python app.py
 ### Organización
 - 📋 **Playlists** — Mix de archivos locales + Immich + YouTube
 - 🖱 **Menú contextual** — Click derecho para reproducir, cola, propiedades
-- 🎨 **Tema claro/oscuro**
-- 📱 **Responsive"
+- 🎨 **Temas personalizables** — Claro, oscuro, Dracula, Catppuccin, y temas custom
+- 📱 **Responsive**
 
 ### Atajos de teclado
 - `←` `→` — Retroceder / adelantar 5s
@@ -71,24 +77,62 @@ El `docker-compose.yml` incluye Invidious con PostgreSQL. Primera vez:
 
 ## Seguridad
 
-- Autenticación por sesión con rate limiting (SQLite)
-- `config.json` y `playlists.json` están en `.gitignore`
-- API keys de Immich encriptadas con Fernet
+### Autenticación y sesiones
+- Contraseñas hasheadas con scrypt (werkzeug)
+- Sesiones con timeout de inactividad (48h)
+- Bloqueo de cuenta tras 5 intentos fallidos (15 min)
+- Rate limiting en endpoints sensibles (SQLite-backed)
+- `SESSION_COOKIE_SECURE` configurable via env var
+
+### Protección de datos
+- API keys de Immich y SID de Invidious encriptados con Fernet (AES-128-CBC)
+- `config.json`, `playlists.json`, `.secret.key` en `.gitignore`
+- Credenciales de Docker en `.env` (gitignored)
+
+### Headers de seguridad
+- `Content-Security-Policy` — Restricción de recursos externos
+- `X-Content-Type-Options: nosniff`
+- `X-Frame-Options: SAMEORIGIN`
+- `Referrer-Policy: strict-origin-when-cross-origin`
+- `Permissions-Policy` — Camera, micrófono, geolocalización deshabilitados
+
+### Protección CSRF
+- Token CSRF generado por sesión
+- Validado en todos los endpoints POST/PUT/DELETE
+- Token inyectado automáticamente via header `X-CSRF-Token`
+
+### Docker
+- Contenedor corre como usuario no-root (`appuser`)
+- `.dockerignore` excluye secretos y artefactos del build
+- Entrypoint con gosu para permisos de volumen
+
+### Endpoints
+- SSRF guard en URL de Immich (bloquea metadata cloud)
+- Directorios del sistema bloqueados como music dirs
+- Errores sanitizados (detalles en logs, mensajes genéricos al cliente)
 
 ## Estructura del proyecto
 
 ```
-app.py              — Flask server, rutas API
-auth.py             — Autenticación y usuarios
+app.py              — Flask server, rutas API, CSRF, security headers
+auth.py             — Autenticación, usuarios, account lockout
 cache.py            — Caché con TTL thread-safe
-config.py           — Manejo de configuración
-files.py            — Listado de archivos y file watcher
-immich.py           — API Immich, compresión FFmpeg
-invidious.py        — API Invidious
+config.py           — Configuración, encriptación Fernet, migraciones
+files.py            — Listado de archivos, file watcher, range requests
+immich.py           — API Immich, compresión FFmpeg, SSRF guard
+invidious.py        — API Invidious, feed, suscripciones
+lyrics.py           — Letras sincronizadas (LRC), proxy LRCLIB
+metadata.py         — Metadata de audio (mutagen)
 playlists.py        — Manejo de playlists
-ratelimit.py        — Rate limiting SQLite
+ratelimit.py        — Rate limiting SQLite (fail-closed)
 upload_queue.py     — Cola de subidas background
-static/app.js       — Lógica del cliente
-static/style.css    — Estilos
+wsgi.py             — Entry point para gunicorn
+entrypoint.sh       — Docker entrypoint (gosu, permisos de volumen)
+Dockerfile          — Build del contenedor (non-root, gosu)
+docker-compose.yml  — Servicios: music-server, invidious, postgres, companion
+.env.example        — Template para credenciales de Docker
+.dockerignore       — Exclusiones del build
+static/app.js       — Lógica del cliente, CSRF interceptor
+static/style.css    — Estilos (Firefox-compatible scrollbars)
 templates/index.html — HTML principal
 ```
