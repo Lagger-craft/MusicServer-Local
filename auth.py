@@ -1,15 +1,47 @@
 import functools
 import logging
+import time
 
 from flask import session, jsonify, request
 from werkzeug.security import generate_password_hash, check_password_hash
 
 logger = logging.getLogger(__name__)
 
+# Account lockout: {username: (fail_count, lockout_until)}
+_login_attempts: dict[str, tuple[int, float]] = {}
+_MAX_FAILS = 5
+_LOCKOUT_SECONDS = 900  # 15 minutes
+
 
 def _get_auth():
     from config import get_config
     return get_config().get("auth", {})
+
+
+def _is_locked(username: str) -> bool:
+    entry = _login_attempts.get(username)
+    if not entry:
+        return False
+    fails, lockout_until = entry
+    if fails >= _MAX_FAILS and time.time() < lockout_until:
+        return True
+    if time.time() >= lockout_until:
+        _login_attempts.pop(username, None)
+    return False
+
+
+def _record_fail(username: str):
+    entry = _login_attempts.get(username, (0, 0))
+    fails = entry[0] + 1
+    if fails >= _MAX_FAILS:
+        _login_attempts[username] = (fails, time.time() + _LOCKOUT_SECONDS)
+        logger.warning("Account locked: %s (%d failed attempts)", username, fails)
+    else:
+        _login_attempts[username] = (fails, 0)
+
+
+def _record_success(username: str):
+    _login_attempts.pop(username, None)
 
 
 def create_user(username, password):
@@ -26,10 +58,16 @@ def create_user(username, password):
 
 
 def verify_user(username, password):
+    if _is_locked(username):
+        return False
     stored = _get_auth().get(username)
     if not stored:
         return False
-    return check_password_hash(stored, password)
+    if check_password_hash(stored, password):
+        _record_success(username)
+        return True
+    _record_fail(username)
+    return False
 
 
 def delete_user(username):

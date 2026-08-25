@@ -90,6 +90,11 @@ handler = RotatingFileHandler("server.log", maxBytes=10 * 1024 * 1024, backupCou
 handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
 logging.getLogger().addHandler(handler)
 
+
+def _safe_log(value: str) -> str:
+    """Strip newlines and control chars to prevent log injection."""
+    return value.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+
 # ── Flask app ───────────────────────────────────────────────
 
 app = Flask(__name__, static_folder="static")
@@ -148,6 +153,7 @@ def set_security_headers(response):
         "connect-src 'self'; "
         "frame-src http://localhost:3000"
     )
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     # Expose CSRF token so the frontend can read it
     csrf_token = session.get("_csrf_token")
     if csrf_token:
@@ -215,8 +221,8 @@ def auth_register():
     password = (data or {}).get("password", "")
     if not username or not password:
         return jsonify({"error": "Usuario y contrasena requeridos"}), 400
-    if len(password) < 6:
-        return jsonify({"error": "La contrasena debe tener al menos 6 caracteres"}), 400
+    if len(password) < 8:
+        return jsonify({"error": "La contrasena debe tener al menos 8 caracteres"}), 400
     ok, err = create_user(username, password)
     if not ok:
         return jsonify({"error": err}), 400
@@ -261,8 +267,8 @@ def auth_change_password():
     new_pw = (data or {}).get("new_password", "")
     if not old_pw or not new_pw:
         return jsonify({"error": "Contrasena actual y nueva requeridas"}), 400
-    if len(new_pw) < 6:
-        return jsonify({"error": "La nueva contrasena debe tener al menos 6 caracteres"}), 400
+    if len(new_pw) < 8:
+        return jsonify({"error": "La nueva contrasena debe tener al menos 8 caracteres"}), 400
     ok, err = change_password(session["user"], old_pw, new_pw)
     if not ok:
         return jsonify({"error": err}), 400
@@ -307,7 +313,7 @@ def favicon():
 def serve_media(filename):
     d, rel = resolve_path(filename)
     if not is_safe_path(d["path"], rel):
-        logger.warning("Blocked path traversal attempt: %s", filename)
+        logger.warning("Blocked path traversal attempt: %s", _safe_log(filename))
         return jsonify({"error": "Acceso denegado: ruta inválida"}), 403
     _, ext = os.path.splitext(rel.lower())
     if ext not in (AUDIO_EXTENSIONS | VIDEO_EXTENSIONS):
@@ -349,7 +355,7 @@ def get_metadata_api():
 
     d, rel = resolve_path(path)
     if not is_safe_path(d["path"], rel):
-        logger.warning("Blocked path traversal attempt in metadata: %s", path)
+        logger.warning("Blocked path traversal attempt in metadata: %s", _safe_log(path))
         return jsonify({"error": "Acceso denegado: ruta inválida"}), 403
 
     full_path = os.path.join(d["path"], rel)
@@ -387,7 +393,7 @@ def get_lyrics_api():
 
     d, rel = resolve_path(path)
     if not is_safe_path(d["path"], rel):
-        logger.warning("Blocked path traversal attempt in lyrics: %s", path)
+        logger.warning("Blocked path traversal attempt in lyrics: %s", _safe_log(path))
         return jsonify({"error": "Acceso denegado: ruta inválida"}), 403
 
     full_path = os.path.join(d["path"], rel)
@@ -422,7 +428,7 @@ def save_lyrics_api():
 
     d, rel = resolve_path(path)
     if not is_safe_path(d["path"], rel):
-        logger.warning("Blocked path traversal attempt in lyrics save: %s", path)
+        logger.warning("Blocked path traversal attempt in lyrics save: %s", _safe_log(path))
         return jsonify({"error": "Acceso denegado: ruta inválida"}), 403
 
     full_path = os.path.join(d["path"], rel)
