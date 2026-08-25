@@ -4,6 +4,7 @@ import subprocess
 import tempfile
 import uuid
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 import requests
 from flask import Response, jsonify, request
@@ -13,7 +14,40 @@ from config import decrypt_value, get_config, update_config, encrypt_value
 COMPRESS_THRESHOLD = 10 * 1024 * 1024 * 1024  # 10GB
 IMMICH_STREAM_TIMEOUT = (10, 300)
 
+# SSRF: addresses that must never be pointed at
+_BLOCKED_HOSTS = {
+    "169.254.169.254",   # AWS / GCP / Azure metadata
+    "0.0.0.0",           # all interfaces (bind shortcut)
+    "metadata.google.internal",
+}
+
 logger = logging.getLogger(__name__)
+
+
+def _validate_immich_url(url: str) -> str | None:
+    """Return an error message if the URL is unsafe, else None.
+
+    Allows http/https to any host (Tailscale IPs, LAN, localhost).
+    Blocks cloud-metadata endpoints and non-http schemes.
+    """
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return "URL inválida"
+
+    if parsed.scheme not in ("http", "https"):
+        return "Solo se permiten URLs http o https"
+
+    hostname = (parsed.hostname or "").lower()
+
+    if hostname in _BLOCKED_HOSTS:
+        return f"No permitido: {hostname}"
+
+    # Block IPv4 link-local 169.254.x.x range
+    if hostname.startswith("169.254."):
+        return "No permitido: dirección de metadata cloud"
+
+    return None
 
 
 def get_immich_config():
@@ -182,6 +216,13 @@ def handle_set_config(data):
     api_key = data.get("apiKey") or ""
     if not url or not api_key:
         return {"error": "URL y API key requeridas"}, 400
+
+    # SSRF guard: reject unsafe URLs before making any request
+    ssrf_error = _validate_immich_url(url)
+    if ssrf_error:
+        logger.warning("Rejected Immich URL: %s — %s", url, ssrf_error)
+        return {"error": ssrf_error}, 400
+
     try:
         # Validate the credential itself instead of using an albums endpoint,
         # whose response can depend on the Immich version and user permissions.
@@ -201,6 +242,7 @@ def handle_set_config(data):
     cfg["immich_url"] = url
     cfg["immich_api_key"] = encrypt_value(api_key)
     update_config(cfg)
+    logger.info("Immich config updated: url=%s", url)
     return {"status": "ok", "url": url, "connected": True}
 
 

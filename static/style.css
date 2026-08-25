@@ -21,8 +21,8 @@
   --bg-queue-item: #f5f2ff;
   --bg-queue-item-hover: #e8e2ff;
   --bg-panel: rgba(255, 255, 255, 0.82);
-  --queue-scrim: linear-gradient(180deg, rgba(250, 248, 255, 0.5), rgba(240, 236, 255, 0.78));
-  --queue-filter: blur(40px) brightness(0.92) saturate(1.05);
+   --queue-scrim: linear-gradient(180deg, rgba(250, 248, 255, 0.5), rgba(240, 236, 255, 0.78));
+   --queue-filter: blur(12px) brightness(0.95) saturate(1.02);
   --text-primary: #2d1b69;
   --text-secondary: #6b5b95;
   --text-tertiary: #9b8ec4;
@@ -66,8 +66,8 @@
   --bg-queue-item: #1a1225;
   --bg-queue-item-hover: #251c35;
   --bg-panel: rgba(26, 18, 37, 0.82);
-  --queue-scrim: linear-gradient(180deg, rgba(15, 10, 26, 0.5), rgba(15, 10, 26, 0.78));
-  --queue-filter: blur(40px) brightness(0.55) saturate(1.1);
+   --queue-scrim: linear-gradient(180deg, rgba(15, 10, 26, 0.5), rgba(15, 10, 26, 0.78));
+   --queue-filter: blur(12px) brightness(0.65) saturate(1.08);
   --text-primary: #f0ecff;
   --text-secondary: #b8a9e8;
   --text-tertiary: #7c6ba8;
@@ -105,7 +105,13 @@ body {
   height: 100vh;
 }
 
-/* Scrollbar global */
+/* Scrollbar global — Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg-scrollbar-thumb) transparent;
+}
+
+/* Scrollbar global — Chromium / WebKit */
 ::-webkit-scrollbar { width: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
@@ -2724,8 +2730,8 @@ body {
   max-width: 100%;
   height: 100vh;
   background: var(--bg-panel);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   border-right: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
@@ -3226,6 +3232,8 @@ body {
   overflow-y: auto;
   padding-right: 12px;
   scroll-behavior: smooth;
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg-scrollbar-thumb) transparent;
 }
 
 .audio-fullscreen-lyrics-body::-webkit-scrollbar {
