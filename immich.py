@@ -96,17 +96,13 @@ def immich_api_request(method, path, data=None, files=None):
             resp = requests.request(method, url, headers=headers,
                                     json=data, timeout=timeout)
         if resp.status_code == 400:
-            body = resp.text[:500] if resp.text else "sin detalles"
-            return None, f"Solicitud inválida a Immich: {body}"
+            logger.warning("Immich 400: %s", resp.text[:500] if resp.text else "")
+            return None, "Solicitud inválida a Immich"
         if resp.status_code == 401:
             return None, "API key inválida"
         if resp.status_code == 403:
-            body = resp.text[:500] if resp.text else ""
-            msg = "La API key no tiene permisos de escritura"
-            if body:
-                msg += f" ({body})"
-            msg += ". Creá una nueva en Immich → Settings → API Keys con todos los scopes."
-            return None, msg
+            logger.warning("Immich 403: %s", resp.text[:500] if resp.text else "")
+            return None, "La API key no tiene permisos de escritura. Creá una nueva en Immich → Settings → API Keys con todos los scopes."
         if resp.status_code == 404:
             return None, "Recurso no encontrado en Immich"
         resp.raise_for_status()
@@ -116,7 +112,8 @@ def immich_api_request(method, path, data=None, files=None):
     except requests.ConnectionError:
         return None, "No se pudo conectar con Immich"
     except Exception as e:
-        return None, str(e)
+        logger.error("Immich API error: %s", e)
+        return None, "Error al comunicarse con Immich"
 
 
 def immich_album_video_assets(album_id):
@@ -201,7 +198,8 @@ def proxy_immich(asset_id, endpoint):
     except requests.Timeout:
         return jsonify({"error": "Timeout al conectar con Immich"}), 504
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.error("Immich proxy error: %s", e)
+        return jsonify({"error": "Error al obtener archivo de Immich"}), 500
 
 
 # ── Config routes ───────────────────────────────────────────
@@ -237,7 +235,7 @@ def handle_set_config(data):
     except Exception as e:
         logger.warning("Immich credential validation failed: status=%s url=%s error=%s",
                        getattr(r, "status_code", "unknown"), url, e)
-        return {"error": str(e)}, 400
+        return {"error": "Error al validar credenciales con Immich"}, 400
     cfg = get_config()
     cfg["immich_url"] = url
     cfg["immich_api_key"] = encrypt_value(api_key)

@@ -139,6 +139,15 @@ def set_security_headers(response):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "SAMEORIGIN"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' https://i.ytimg.com data:; "
+        "connect-src 'self'; "
+        "frame-src http://localhost:3000"
+    )
     # Expose CSRF token so the frontend can read it
     csrf_token = session.get("_csrf_token")
     if csrf_token:

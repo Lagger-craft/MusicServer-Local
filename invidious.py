@@ -63,7 +63,8 @@ def invidious_auth_get(path):
         resp.raise_for_status()
         return resp.json(), None
     except Exception as e:
-        return None, str(e)
+        logger.error("Invidious GET error: %s", e)
+        return None, "Error al comunicarse con Invidious"
 
 
 def invidious_auth_post(path, data=None):
@@ -80,7 +81,8 @@ def invidious_auth_post(path, data=None):
             return {"status": "ok"}, None
         return resp.json(), None
     except Exception as e:
-        return None, str(e)
+        logger.error("Invidious POST error: %s", e)
+        return None, "Error al comunicarse con Invidious"
 
 
 def get_feed(max_results=50):

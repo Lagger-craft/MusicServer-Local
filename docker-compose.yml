@@ -29,9 +29,9 @@ services:
     volumes:
       - invidious-postgres:/var/lib/postgresql/data
     environment:
-      POSTGRES_DB: invidious
-      POSTGRES_USER: kemal
-      POSTGRES_PASSWORD: kemal
+      POSTGRES_DB: ${POSTGRES_DB:-invidious}
+      POSTGRES_USER: ${POSTGRES_USER:-kemal}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 30s
@@ -51,19 +51,19 @@ services:
     environment:
       INVIDIOUS_CONFIG: |
         db:
-          dbname: invidious
-          user: kemal
-          password: kemal
+          dbname: ${POSTGRES_DB:-invidious}
+          user: ${POSTGRES_USER:-kemal}
+          password: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
           host: invidious-db
           port: 5432
         check_tables: true
         registration_enabled: true
         captcha_enabled: false
         login_enabled: true
-        hmac_key: "4b6a5afbdde5089a07854c01f8e5e296"
+        hmac_key: "${INVIDIOUS_HMAC_KEY:?Set INVIDIOUS_HMAC_KEY in .env}"
         invidious_companion:
           - private_url: "http://companion:8282/companion"
-        invidious_companion_key: "nHDoMbdZekWabBaw"
+        invidious_companion_key: "${INVIDIOUS_COMPANION_KEY:?Set INVIDIOUS_COMPANION_KEY in .env}"
         domain: "localhost"
         external_port: 3000
         https_only: false
@@ -79,7 +79,7 @@ services:
     container_name: invidious-companion
     restart: unless-stopped
     environment:
-      - SERVER_SECRET_KEY=nHDoMbdZekWabBaw
+      - SERVER_SECRET_KEY=${INVIDIOUS_COMPANION_KEY:?Set INVIDIOUS_COMPANION_KEY in .env}
     cap_drop:
       - ALL
     read_only: true
