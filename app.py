@@ -179,6 +179,13 @@ def csrf_protect():
         return jsonify({"error": "CSRF token inválido"}), 403
 
 
+@app.before_request
+def renew_session_on_activity():
+    """Renew session cookie on every authenticated request (idle timeout)."""
+    if "user" in session:
+        session.modified = True
+
+
 # ── Auth routes ─────────────────────────────────────────────
 
 @app.route("/api/auth/status")
