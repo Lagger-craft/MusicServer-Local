@@ -11,6 +11,7 @@ from flask import Response, jsonify, request
 from config import decrypt_value, get_config, update_config, encrypt_value
 
 COMPRESS_THRESHOLD = 10 * 1024 * 1024 * 1024  # 10GB
+IMMICH_STREAM_TIMEOUT = (10, 300)
 
 logger = logging.getLogger(__name__)
 
@@ -137,10 +138,13 @@ def proxy_immich(asset_id, endpoint):
     if range_h:
         headers["Range"] = range_h
     try:
-        resp = requests.get(url, headers=headers, stream=True, timeout=30)
+        resp = requests.get(url, headers=headers, stream=True,
+                            timeout=IMMICH_STREAM_TIMEOUT)
         if resp.status_code in (401, 403):
+            resp.close()
             return jsonify({"error": "Sin permisos para acceder al archivo en Immich"}), resp.status_code
         if resp.status_code == 404:
+            resp.close()
             return jsonify({"error": "Archivo no encontrado en Immich"}), 404
         out_headers = {}
         for k, v in resp.headers.items():
@@ -151,9 +155,12 @@ def proxy_immich(asset_id, endpoint):
                 out_headers[k] = v
 
         def gen():
-            for chunk in resp.iter_content(65536):
-                if chunk:
-                    yield chunk
+            try:
+                for chunk in resp.iter_content(65536):
+                    if chunk:
+                        yield chunk
+            finally:
+                resp.close()
 
         return Response(gen(), status=resp.status_code,
                         headers=out_headers, direct_passthrough=True)

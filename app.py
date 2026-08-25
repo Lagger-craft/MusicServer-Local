@@ -362,10 +362,10 @@ def save_lyrics_api():
         logger.info("Saved lyrics to %s", lrc_path)
     except OSError as e:
         logger.error("Failed to save lyrics for %s: %s", path, e)
-        return jsonify({"error": f"Error al guardar letra: {str(e)}"}), 500
+        return jsonify({"error": "Error al guardar letra"}), 500
     except Exception as e:
         logger.error("Unexpected error saving lyrics for %s: %s", path, e, exc_info=True)
-        return jsonify({"error": f"Error inesperado: {str(e)}"}), 500
+        return jsonify({"error": "Error inesperado"}), 500
 
     lyrics_cache.invalidate(path)
 
@@ -708,7 +708,8 @@ def invidious_search():
         resp = requests.get(base + "/api/v1/search", params=params, timeout=15)
         return jsonify(resp.json())
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.error("Invidious search error: %s", e, exc_info=True)
+        return jsonify({"error": "Error al buscar en Invidious"}), 500
 
 
 @app.route("/api/invidious/trending")
@@ -721,7 +722,8 @@ def invidious_trending():
         resp = requests.get(base + "/api/v1/trending", timeout=15)
         return jsonify(resp.json())
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.error("Invidious trending error: %s", e, exc_info=True)
+        return jsonify({"error": "Error al cargar tendencias"}), 500
 
 
 @app.route("/api/invidious/video/<videoId>")
@@ -736,7 +738,8 @@ def invidious_video(videoId):
             return jsonify({"error": "Error al obtener video"}), resp.status_code
         return jsonify(resp.json())
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.error("Invidious video error: %s", e, exc_info=True)
+        return jsonify({"error": "Error al obtener video"}), 500
 
 
 @app.route("/api/invidious/login", methods=["POST"])
@@ -767,7 +770,8 @@ def invidious_login():
     except requests.ConnectionError:
         return jsonify({"error": "No se pudo conectar con Invidious"}), 503
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.error("Invidious login error: %s", e, exc_info=True)
+        return jsonify({"error": "Error al conectar con Invidious"}), 500
 
 
 @app.route("/api/invidious/logout", methods=["POST"])
@@ -845,7 +849,8 @@ def invidious_unsubscribe():
         resp.raise_for_status()
         return jsonify({"status": "ok"})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.error("Invidious unsubscribe error: %s", e, exc_info=True)
+        return jsonify({"error": "Error al cancelar suscripción"}), 500
 
 
 @app.route("/api/invidious/channel/<ucid>")
@@ -861,7 +866,8 @@ def invidious_channel_videos(ucid):
             return jsonify({"error": "Error al obtener videos"}), resp.status_code
         return jsonify(resp.json())
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.error("Invidious channel videos error: %s", e, exc_info=True)
+        return jsonify({"error": "Error al obtener videos del canal"}), 500
 
 
 # ══════════════════════════════════════════════════════════════
@@ -1027,6 +1033,6 @@ def remove_song_from_playlist(pid):
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    debug = os.environ.get("FLASK_DEBUG", "1") == "1"
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
     logger.info("Server starting on port %d (debug=%s)", port, debug)
     app.run(host="0.0.0.0", port=port, debug=debug)

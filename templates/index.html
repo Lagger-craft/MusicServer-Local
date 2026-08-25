@@ -4,6 +4,13 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Server Music Player</title>
+  <script>
+    (() => {
+      const saved = localStorage.getItem('theme');
+      const valid = saved === 'light' || saved === 'dark' || (saved && saved.startsWith('custom:'));
+      document.documentElement.dataset.theme = valid ? saved : 'light';
+    })();
+  </script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
@@ -21,7 +28,8 @@
           <button class="view-btn active" onclick="setView('list')">Lista</button>
           <button class="view-btn" onclick="setView('grid')">Cuadrícula</button>
         </div>
-        <button class="theme-toggle" onclick="toggleTheme()" title="Cambiar tema" id="themeToggle">🌙</button>
+        <button class="settings-btn" onclick="showSettingsModal()" title="Abrir ajustes" aria-label="Abrir ajustes">⚙</button>
+        <button class="theme-toggle" onclick="toggleTheme()" title="Cambiar tema" aria-label="Cambiar tema" id="themeToggle">🌙</button>
       </div>
     </div>
 
@@ -263,6 +271,52 @@
       </div>
       <div class="modal-buttons immich-config-disconnect" id="immichDisconnectBtn" style="display:none;margin-top:8px">
         <button class="modal-btn cancel" onclick="disconnectImmich()" style="color:var(--accent-rose)">Desconectar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Theme Settings Modal -->
+  <div class="modal-overlay" id="settingsModal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <div class="modal modal-settings">
+      <div class="settings-header">
+        <div>
+          <div class="modal-kicker">Personalización</div>
+          <h3 id="settingsTitle">Ajustes de tema</h3>
+        </div>
+        <button class="modal-close-btn" onclick="hideSettingsModal()" aria-label="Cerrar ajustes">✕</button>
+      </div>
+      <p class="modal-hint settings-intro">Elegí una apariencia para este navegador. Los temas personalizados no se guardan en el servidor.</p>
+      <div class="theme-grid" id="themeGrid"></div>
+      <div class="settings-divider"></div>
+      <div class="settings-actions">
+        <button class="add-all-btn" onclick="openThemeEditor()">＋ Crear tema</button>
+        <button class="add-all-btn" onclick="duplicateActiveTheme()">⧉ Duplicar actual</button>
+        <button class="add-all-btn" onclick="exportThemes()">↓ Exportar</button>
+        <button class="add-all-btn" onclick="document.getElementById('themeImportInput').click()">↑ Importar</button>
+        <input type="file" id="themeImportInput" accept="application/json" hidden onchange="importThemes(event)">
+      </div>
+      <div class="modal-buttons">
+        <button class="modal-btn confirm" onclick="hideSettingsModal()">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Theme Editor Modal -->
+  <div class="modal-overlay" id="themeEditorModal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="themeEditorTitle">
+    <div class="modal modal-settings">
+      <div class="settings-header">
+        <div>
+          <div class="modal-kicker">Tema local</div>
+          <h3 id="themeEditorTitle">Crear tema</h3>
+        </div>
+        <button class="modal-close-btn" onclick="hideThemeEditor()" aria-label="Cerrar editor">✕</button>
+      </div>
+      <label class="theme-field theme-name-field">Nombre<input id="themeNameInput" maxlength="40" placeholder="Mi tema"></label>
+      <div class="theme-fields" id="themeFields"></div>
+      <div class="theme-editor-error" id="themeEditorError" role="alert"></div>
+      <div class="modal-buttons">
+        <button class="modal-btn cancel" onclick="hideThemeEditor()">Cancelar</button>
+        <button class="modal-btn confirm" onclick="saveThemeEditor()">Guardar</button>
       </div>
     </div>
   </div>

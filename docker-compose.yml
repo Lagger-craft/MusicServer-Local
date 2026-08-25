@@ -2,8 +2,10 @@ services:
   music-server:
     build: .
     container_name: music-server
+    # Sólo accesible vía la tailnet (IP de Tailscale del host),
+    # no desde la LAN. Si cambiás de IP de Tailscale, actualizala acá.
     ports:
-      - "5000:5000"
+      - "100.75.180.25:5000:5000"
     volumes:
       - /home/lagger/Music:/music:ro
       - ./lyrics:/lyrics:rw
@@ -40,8 +42,9 @@ services:
     image: quay.io/invidious/invidious:latest
     container_name: invidious
     restart: unless-stopped
+    # Sólo accesible vía la tailnet (IP de Tailscale del host)
     ports:
-      - "3000:3000"
+      - "100.75.180.25:3000:3000"
     depends_on:
       invidious-db:
         condition: service_healthy

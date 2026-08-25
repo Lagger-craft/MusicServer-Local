@@ -475,22 +475,179 @@ function recordTrackSwitch(newTrack) {
 }
 
 /* ==================== THEME ==================== */
+const THEME_STORAGE_KEY = 'musicserver.themes.v1';
+const THEME_COLOR_KEYS = [
+  ['bg-primary', 'Fondo principal'], ['bg-secondary', 'Fondo secundario'],
+  ['bg-tertiary', 'Superficie elevada'], ['bg-hover', 'Hover'], ['bg-active', 'Activo'],
+  ['bg-card', 'Tarjetas'], ['bg-input', 'Campos'], ['bg-modal', 'Modal'],
+  ['text-primary', 'Texto principal'], ['text-secondary', 'Texto secundario'],
+  ['text-tertiary', 'Texto tenue'], ['accent-primary', 'Acento principal'],
+  ['accent-secondary', 'Acento secundario'], ['accent-pink', 'Acento rosa'],
+  ['accent-mint', 'Acento menta'], ['accent-rose', 'Acento rojo'],
+  ['accent-sky', 'Acento cielo'], ['border-color', 'Bordes'], ['border-hover', 'Borde activo'],
+];
+
+const BUILTIN_THEMES = {
+  light: { name: 'Claro', colors: {
+    'bg-primary':'#faf8ff','bg-secondary':'#f0ecff','bg-tertiary':'#e8e2ff','bg-hover':'#ddd6ff','bg-active':'#d0c7ff','bg-card':'#ffffff','bg-input':'#f5f2ff','bg-modal':'#ffffff','text-primary':'#2d1b69','text-secondary':'#6b5b95','text-tertiary':'#9b8ec4','accent-primary':'#8b5cf6','accent-secondary':'#a78bfa','accent-pink':'#ec4899','accent-mint':'#6ee7b7','accent-rose':'#fb7185','accent-sky':'#38bdf8','border-color':'#e0d8f5','border-hover':'#c4b5fd'
+  }},
+  dark: { name: 'Oscuro', colors: {
+    'bg-primary':'#0f0a1a','bg-secondary':'#1a1225','bg-tertiary':'#251c35','bg-hover':'#2d2240','bg-active':'#362a4d','bg-card':'#1a1225','bg-input':'#251c35','bg-modal':'#1a1225','text-primary':'#f0ecff','text-secondary':'#b8a9e8','text-tertiary':'#8f80b7','accent-primary':'#a78bfa','accent-secondary':'#8b5cf6','accent-pink':'#f472b6','accent-mint':'#6ee7b7','accent-rose':'#fb7185','accent-sky':'#38bdf8','border-color':'#2d2240','border-hover':'#6d54a0'
+  }},
+  dracula: { name: 'Dracula', colors: {
+    'bg-primary':'#282a36','bg-secondary':'#21222c','bg-tertiary':'#343746','bg-hover':'#44475a','bg-active':'#6272a4','bg-card':'#282a36','bg-input':'#343746','bg-modal':'#282a36','text-primary':'#f8f8f2','text-secondary':'#c7c9d1','text-tertiary':'#9a9bad','accent-primary':'#bd93f9','accent-secondary':'#ff79c6','accent-pink':'#ff79c6','accent-mint':'#50fa7b','accent-rose':'#ff5555','accent-sky':'#8be9fd','border-color':'#44475a','border-hover':'#6272a4'
+  }},
+  catppuccin: { name: 'Catppuccin Mocha', colors: {
+    'bg-primary':'#1e1e2e','bg-secondary':'#181825','bg-tertiary':'#313244','bg-hover':'#45475a','bg-active':'#585b70','bg-card':'#1e1e2e','bg-input':'#313244','bg-modal':'#1e1e2e','text-primary':'#cdd6f4','text-secondary':'#bac2de','text-tertiary':'#9399b2','accent-primary':'#cba6f7','accent-secondary':'#89b4fa','accent-pink':'#f5c2e7','accent-mint':'#a6e3a1','accent-rose':'#f38ba8','accent-sky':'#89dceb','border-color':'#45475a','border-hover':'#7f849c'
+  }},
+};
+let editingThemeId = null;
+let themeModalLastFocus = null;
+
+function readCustomThemes() {
+  try {
+    const value = JSON.parse(localStorage.getItem(THEME_STORAGE_KEY) || '{}');
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    return Object.fromEntries(Object.entries(value).filter(([id, theme]) => id.startsWith('custom:') && isValidTheme(theme)));
+  } catch (_) { return {}; }
+}
+
+function isValidTheme(theme) {
+  return theme && typeof theme.name === 'string' && theme.name.trim() && theme.colors &&
+    THEME_COLOR_KEYS.every(([key]) => typeof theme.colors[key] === 'string' && /^#[0-9a-f]{6}$/i.test(theme.colors[key]));
+}
+
+function applyTheme(themeId) {
+  const custom = readCustomThemes();
+  const theme = BUILTIN_THEMES[themeId] || custom[themeId];
+  const fallbackId = theme ? themeId : 'light';
+  const selected = theme || BUILTIN_THEMES.light;
+  const root = document.documentElement;
+  root.dataset.theme = fallbackId;
+  THEME_COLOR_KEYS.forEach(([key]) => root.style.setProperty(`--${key}`, selected.colors[key]));
+  root.style.setProperty('--bg-overlay', `color-mix(in srgb, ${selected.colors['bg-primary']} 35%, #000)`);
+  root.style.setProperty('--bg-player', `linear-gradient(135deg, ${selected.colors['bg-tertiary']}, ${selected.colors['bg-secondary']}, ${selected.colors['bg-primary']})`);
+  root.style.setProperty('--bg-topbar', `linear-gradient(135deg, ${selected.colors['bg-secondary']}, ${selected.colors['bg-tertiary']})`);
+  root.style.setProperty('--bg-sidebar', selected.colors['bg-primary']);
+  root.style.setProperty('--bg-track', selected.colors['bg-card']);
+  root.style.setProperty('--bg-track-hover', selected.colors['bg-hover']);
+  root.style.setProperty('--bg-grid', selected.colors['bg-card']);
+  root.style.setProperty('--bg-grid-hover', selected.colors['bg-hover']);
+  root.style.setProperty('--bg-progress', selected.colors['bg-tertiary']);
+  root.style.setProperty('--bg-scrollbar', selected.colors['bg-tertiary']);
+  root.style.setProperty('--bg-scrollbar-thumb', selected.colors['border-hover']);
+  root.style.setProperty('--bg-queue-item', selected.colors['bg-card']);
+  root.style.setProperty('--bg-queue-item-hover', selected.colors['bg-hover']);
+  root.style.setProperty('--bg-panel', selected.colors['bg-modal'] + 'dd');
+  root.style.setProperty('--queue-scrim', `linear-gradient(180deg, ${selected.colors['bg-primary']}88, ${selected.colors['bg-primary']}dd)`);
+  root.style.setProperty('--queue-filter', 'blur(40px) brightness(.75) saturate(1.05)');
+  root.style.setProperty('--gradient-accent', `linear-gradient(135deg, ${selected.colors['accent-primary']}, ${selected.colors['accent-pink']})`);
+  root.style.setProperty('--shadow-sm', `0 2px 8px ${selected.colors['accent-primary']}22`);
+  root.style.setProperty('--shadow-md', `0 4px 16px ${selected.colors['accent-primary']}30`);
+  root.style.setProperty('--shadow-lg', `0 8px 32px ${selected.colors['accent-primary']}40`);
+  root.style.setProperty('--shadow-glow', `0 0 20px ${selected.colors['accent-primary']}55`);
+  localStorage.setItem('theme', fallbackId);
+  updateThemeIcon(fallbackId);
+  renderThemeGrid();
+}
+
 function initTheme() {
   const saved = localStorage.getItem('theme') || 'light';
-  document.documentElement.setAttribute('data-theme', saved);
-  updateThemeIcon(saved);
+  applyTheme(saved);
 }
 
 function toggleTheme() {
   const current = document.documentElement.getAttribute('data-theme');
   const next = current === 'light' ? 'dark' : 'light';
-  document.documentElement.setAttribute('data-theme', next);
-  localStorage.setItem('theme', next);
-  updateThemeIcon(next);
+  applyTheme(next);
 }
 
 function updateThemeIcon(theme) {
-  document.getElementById('themeToggle').textContent = theme === 'light' ? '🌙' : '☀️';
+  const button = document.getElementById('themeToggle');
+  if (button) button.textContent = theme === 'light' ? '🌙' : '☀️';
+}
+
+function allThemes() { return {...BUILTIN_THEMES, ...readCustomThemes()}; }
+
+function showSettingsModal() {
+  themeModalLastFocus = document.activeElement;
+  renderThemeGrid();
+  const modal = document.getElementById('settingsModal');
+  modal.style.display = 'flex';
+  modal.querySelector('.modal-close-btn').focus();
+}
+
+function hideSettingsModal() {
+  document.getElementById('settingsModal').style.display = 'none';
+  if (themeModalLastFocus) themeModalLastFocus.focus();
+}
+
+function renderThemeGrid() {
+  const grid = document.getElementById('themeGrid');
+  if (!grid) return;
+  const active = document.documentElement.dataset.theme;
+  grid.innerHTML = Object.entries(allThemes()).map(([id, theme]) => {
+    const custom = !BUILTIN_THEMES[id];
+    return `<article class="theme-card${id === active ? ' active' : ''}">
+      <button class="theme-select" onclick="applyTheme('${jsStr(id)}')" aria-pressed="${id === active}">
+        <span class="theme-swatches"><i style="background:${theme.colors['bg-primary']}"></i><i style="background:${theme.colors['accent-primary']}"></i><i style="background:${theme.colors['accent-pink']}"></i></span>
+        <strong>${escapeHtml(theme.name)}</strong><small>${custom ? 'Personalizado' : 'Incluido'}</small>
+      </button>
+      ${custom ? `<span class="theme-card-actions"><button onclick="openThemeEditor('${jsStr(id)}')">Editar</button><button onclick="deleteTheme('${jsStr(id)}')">Eliminar</button></span>` : ''}
+    </article>`;
+  }).join('');
+}
+
+function openThemeEditor(id = null) {
+  editingThemeId = id;
+  const theme = id ? readCustomThemes()[id] : {name: '', colors: {...BUILTIN_THEMES.dark.colors}};
+  document.getElementById('themeEditorTitle').textContent = id ? 'Editar tema' : 'Crear tema';
+  document.getElementById('themeNameInput').value = theme.name || '';
+  document.getElementById('themeFields').innerHTML = THEME_COLOR_KEYS.map(([key, label]) => `<label class="theme-field">${label}<span><input type="color" data-theme-key="${key}" value="${theme.colors[key]}"><code>${theme.colors[key]}</code></span></label>`).join('');
+  document.getElementById('themeEditorError').textContent = '';
+  document.getElementById('themeEditorModal').style.display = 'flex';
+  document.getElementById('themeNameInput').focus();
+}
+
+function hideThemeEditor() { document.getElementById('themeEditorModal').style.display = 'none'; }
+
+function saveThemeEditor() {
+  const name = document.getElementById('themeNameInput').value.trim();
+  const colors = Object.fromEntries(THEME_COLOR_KEYS.map(([key]) => [key, document.querySelector(`[data-theme-key="${key}"]`).value]));
+  if (!name || !isValidTheme({name, colors})) { document.getElementById('themeEditorError').textContent = 'Ingresá un nombre y completá todos los colores.'; return; }
+  const id = editingThemeId || `custom:${Date.now().toString(36)}`;
+  const themes = readCustomThemes(); themes[id] = {name, colors};
+  localStorage.setItem(THEME_STORAGE_KEY, JSON.stringify(themes));
+  hideThemeEditor(); applyTheme(id); showSettingsModal();
+}
+
+function duplicateActiveTheme() {
+  const theme = allThemes()[document.documentElement.dataset.theme] || BUILTIN_THEMES.light;
+  editingThemeId = null; openThemeEditor();
+  document.getElementById('themeNameInput').value = `${theme.name} (copia)`;
+  THEME_COLOR_KEYS.forEach(([key]) => { document.querySelector(`[data-theme-key="${key}"]`).value = theme.colors[key]; });
+}
+
+function deleteTheme(id) {
+  if (!confirm('¿Eliminar este tema personalizado?')) return;
+  const themes = readCustomThemes(); delete themes[id]; localStorage.setItem(THEME_STORAGE_KEY, JSON.stringify(themes));
+  if (document.documentElement.dataset.theme === id) applyTheme('light'); else renderThemeGrid();
+}
+
+function exportThemes() {
+  const blob = new Blob([JSON.stringify(readCustomThemes(), null, 2)], {type: 'application/json'});
+  const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = 'musicserver-themes.json'; link.click(); URL.revokeObjectURL(link.href);
+}
+
+function importThemes(event) {
+  const file = event.target.files[0]; event.target.value = ''; if (!file) return;
+  const reader = new FileReader(); reader.onload = () => {
+    try {
+      const input = JSON.parse(reader.result); const valid = Object.fromEntries(Object.entries(input).filter(([id, theme]) => id.startsWith('custom:') && isValidTheme(theme)));
+      localStorage.setItem(THEME_STORAGE_KEY, JSON.stringify({...readCustomThemes(), ...valid})); renderThemeGrid();
+      showToast(Object.keys(valid).length ? 'Temas importados' : 'No se encontraron temas válidos');
+    } catch (_) { showToast('No se pudo importar el archivo', 'error'); }
+  }; reader.readAsText(file);
 }
 
 /* ==================== DATA LOADING ==================== */
@@ -3297,6 +3454,10 @@ document.addEventListener('keydown', (e) => {
 
   // Escape: exit audio fullscreen or close YouTube player
   if (e.key === 'Escape') {
+    const settings = document.getElementById('settingsModal');
+    const editor = document.getElementById('themeEditorModal');
+    if (editor && editor.style.display !== 'none') { hideThemeEditor(); return; }
+    if (settings && settings.style.display !== 'none') { hideSettingsModal(); return; }
     if (isAudioFsOpen) {
       closeAudioFullscreen();
       return;
@@ -3304,6 +3465,16 @@ document.addEventListener('keydown', (e) => {
     if (youtubePlaying) {
       closeYouTubePlayer();
       return;
+    }
+  }
+
+  const openModal = document.querySelector('.modal-overlay[style*="display: flex"] .modal');
+  if (e.key === 'Tab' && openModal) {
+    const focusable = [...openModal.querySelectorAll('button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])')];
+    if (focusable.length) {
+      const first = focusable[0], last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
     }
   }
 
