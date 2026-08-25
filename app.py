@@ -34,6 +34,7 @@ from config import (
     get_config,
     get_music_dirs,
     migrate_immich_key,
+    migrate_invidious_sid,
     update_config,
 )
 from files import (
@@ -120,7 +121,7 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE", "0") == "1",
-    PERMANENT_SESSION_LIFETIME=86400 * 30,
+    PERMANENT_SESSION_LIFETIME=86400 * 2,
 )
 
 
@@ -259,6 +260,7 @@ start_watcher()
 # ── Migrations ──────────────────────────────────────────────
 
 migrate_immich_key()
+migrate_invidious_sid()
 
 logger.info("Starting music server")
 
@@ -847,6 +849,7 @@ def invidious_logout():
 
 
 @app.route("/api/invidious/status")
+@login_required
 def invidious_status():
     base = get_invidious_url()
     sid = get_invidious_sid()

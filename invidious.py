@@ -5,7 +5,7 @@ import time
 import requests
 
 from cache import ThreadSafeCache
-from config import get_config, update_config
+from config import decrypt_value, encrypt_value, get_config, update_config
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +35,12 @@ def get_invidious_url():
 
 def get_invidious_sid():
     cfg = get_config()
-    return cfg.get("invidious_sid", "")
+    return decrypt_value(cfg.get("invidious_sid", ""))
 
 
 def save_invidious_sid(sid):
     cfg = get_config()
-    cfg["invidious_sid"] = sid
+    cfg["invidious_sid"] = encrypt_value(sid) if sid else ""
     update_config(cfg)
 
 

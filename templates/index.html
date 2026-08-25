@@ -25,8 +25,8 @@
       <div class="topbar-controls">
         <input type="text" class="search-box" placeholder="Buscar canciones..." id="searchInput" oninput="filterTracks()">
         <div class="view-toggle">
-          <button class="view-btn active" onclick="setView('list')">Lista</button>
-          <button class="view-btn" onclick="setView('grid')">Cuadrícula</button>
+          <button class="view-btn active" onclick="setView('list', event)">Lista</button>
+          <button class="view-btn" onclick="setView('grid', event)">Cuadrícula</button>
         </div>
         <button class="settings-btn" onclick="showSettingsModal()" title="Abrir ajustes" aria-label="Abrir ajustes">⚙</button>
         <button class="theme-toggle" onclick="toggleTheme()" title="Cambiar tema" aria-label="Cambiar tema" id="themeToggle">🌙</button>

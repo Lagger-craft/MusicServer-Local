@@ -117,3 +117,12 @@ def migrate_immich_key():
         cfg["immich_api_key"] = encrypt_value(raw)
         update_config(cfg)
         logger.info("Immich API key migrated to encrypted storage")
+
+
+def migrate_invidious_sid():
+    cfg = get_config()
+    raw = cfg.get("invidious_sid", "")
+    if raw and not raw.startswith("__enc__"):
+        cfg["invidious_sid"] = encrypt_value(raw)
+        update_config(cfg)
+        logger.info("Invidious SID migrated to encrypted storage")

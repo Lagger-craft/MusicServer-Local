@@ -76,7 +76,7 @@ def is_rate_limited(key, max_requests, window_seconds):
 
         except Exception as e:
             logger.error("Rate limit check failed: %s", e)
-            return False, max_requests  # Fail open
+            return True, 0  # Fail closed — deny on error
 
 
 def limit(max_requests, window_seconds):

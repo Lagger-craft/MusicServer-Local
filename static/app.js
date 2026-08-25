@@ -2746,10 +2746,10 @@ function formatSize(bytes) {
 }
 
 /* ==================== VIEW TOGGLE ==================== */
-function setView(view) {
+function setView(view, evt) {
   currentView = view;
   document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
-  event.target.classList.add('active');
+  (evt || event).target.classList.add('active');
   document.getElementById('listView').style.display = view === 'list' ? '' : 'none';
   document.getElementById('gridView').style.display = view === 'grid' ? '' : 'none';
 }
