@@ -1473,9 +1473,8 @@ body {
 .queue-overlay {
   position: fixed;
   top: 0; left: 0; right: 0; bottom: 0;
-  background: var(--bg-overlay);
+  background: transparent;
   z-index: 50;
-  animation: fade-in 0.2s var(--animation-smooth);
 }
 
 .queue-drawer {
@@ -2715,9 +2714,8 @@ body {
 .lyrics-overlay {
   position: fixed;
   top: 0; left: 0; right: 0; bottom: 0;
-  background: var(--bg-overlay);
+  background: transparent;
   z-index: 50;
-  animation: fade-in 0.2s var(--animation-smooth);
 }
 
 .lyrics-drawer {
